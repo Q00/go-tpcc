@@ -1,95 +1,63 @@
-package mongodb
+package elasticsearch
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
+	"strings"
 	"time"
+
+	types "github.com/Percona-Lab/go-tpcc/databases/elasticsearch/models"
 	"github.com/Percona-Lab/go-tpcc/tpcc/models"
+	"github.com/elastic/go-elasticsearch/v7"
+	"github.com/elastic/go-elasticsearch/v7/esapi"
+	"github.com/elastic/go-elasticsearch/v7/esutil"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
-	"go.mongodb.org/mongo-driver/x/bsonx"
 )
-
-type MongoDB struct {
-	Client *mongo.Client
-	C *mongo.Database
-	Aggregate bool
-	findAndModify bool
-	transactions bool
-	ctx mongo.SessionContext
-}
 
 type ElasticSearch struct {
 	Client *elasticsearch.Client
+	ctx    context.Context
 }
 
-func NewElasticSearch(uri string) (*elasticsearch.Client, error) {
+// connect elasticsearch
+func NewElasticSearch(uri string) (*ElasticSearch, error) {
 	cfg := elasticsearch.Config{
 		Addresses: []string{
 			uri,
 		},
 	}
 	es, err := elasticsearch.NewClient(cfg)
-	res, errIn := es.Info()
+
+	if err != nil {
+		return nil, err
+	}
+
+	_, errIn := es.Info()
 	if errIn != nil {
 		log.Fatalf("Error getting response: %s", errIn)
 		return nil, errIn
 	}
 
-	return es
-}
-
-func NewMongoDb(uri string, dbname string, transactions bool, findandmodify bool) (*MongoDB, error){
-	client, err := mongo.NewClient(options.Client().ApplyURI(uri))
-
-	if err != nil {
-		return nil, err
-	}
-
-	err = client.Connect(context.Background())
-
-	if err != nil {
-		return nil, err
-	}
-
-	err = client.Ping(context.TODO(), nil)
-
-	if err != nil {
-		return nil, err
-	}
-
-
-	session, err := client.StartSession()
-
-	if err != nil {
-		return nil, err
-	}
-
-
-	return &MongoDB{
-		Client: client,
-		C: client.Database(dbname),
-		Aggregate: false,
-		transactions: transactions,
-		findAndModify: findandmodify,
-		ctx: mongo.NewSessionContext(context.Background(), session),
+	return &ElasticSearch{
+		Client: es,
+		ctx:    context.Background(),
 	}, nil
 }
 
-func (db *MongoDB) CreateSchema() error {
-	return nil
-}
-
-func (db *Elasticsearch) CreateSchema() error {
+func (db *ElasticSearch) CreateSchema() error {
 	return nil
 }
 
 // transaction 은 es에서는 version update 변수로 작동하므로 pass
 
-func (db *MongoDB) StartTrx() error {
-	sess :=  mongo.SessionFromContext(db.ctx)
+func (db *ElasticSearch) StartTrx() error {
+	sess := mongo.SessionFromContext(db.ctx)
 	err := sess.StartTransaction()
 	if err != nil {
 		return err
@@ -98,8 +66,8 @@ func (db *MongoDB) StartTrx() error {
 	return nil
 }
 
-func (db *MongoDB) CommitTrx() error {
-	sess :=  mongo.SessionFromContext(db.ctx)
+func (db *ElasticSearch) CommitTrx() error {
+	sess := mongo.SessionFromContext(db.ctx)
 	err := sess.CommitTransaction(db.ctx)
 	if err != nil {
 		return err
@@ -108,8 +76,8 @@ func (db *MongoDB) CommitTrx() error {
 	return nil
 }
 
-func (db *MongoDB) RollbackTrx() error {
-	sess :=  mongo.SessionFromContext(db.ctx)
+func (db *ElasticSearch) RollbackTrx() error {
+	sess := mongo.SessionFromContext(db.ctx)
 	err := sess.AbortTransaction(db.ctx)
 	if err != nil {
 		return err
@@ -118,13 +86,14 @@ func (db *MongoDB) RollbackTrx() error {
 	return nil
 }
 
-// es에서는 schema가 자체 인덱스 매핑이므로 필요 없다
+// there is no need about indexing on elasticsearch
 
 func (db *ElasticSearch) CreateIndexes() error {
 	return nil
 }
 
-func (db *MongoDB) CreateIndexes() error {
+/*
+func (db *ElasticSearch) CreateIndexes() error {
 	ascending := bsonx.Int32(1)
 	descending := bsonx.Int32(-1)
 
@@ -178,7 +147,7 @@ func (db *MongoDB) CreateIndexes() error {
 			},
 		},
 		{
-			Keys: bsonx.Doc {
+			Keys: bsonx.Doc{
 				{"C_W_ID", ascending},
 				{"C_D_ID", ascending},
 				{"C_LAST", ascending},
@@ -234,7 +203,6 @@ func (db *MongoDB) CreateIndexes() error {
 		return err
 	}
 
-
 	_, err = db.C.Collection("NEW_ORDER").Indexes().CreateMany(context.Background(), []mongo.IndexModel{
 		{
 			Keys: bsonx.Doc{
@@ -265,7 +233,6 @@ func (db *MongoDB) CreateIndexes() error {
 				{"OL_W_ID", ascending},
 				{"OL_I_ID", descending},
 				{"OL_AMOUNT", ascending},
-
 			},
 		},
 	})
@@ -276,56 +243,163 @@ func (db *MongoDB) CreateIndexes() error {
 
 	return nil
 }
+*/
 
-func (db *MongoDB) InsertOne(tableName string, d interface{}) error {
-	collection := db.C.Collection(tableName)
-	_, err := collection.InsertOne(db.ctx, d)
+func (db *ElasticSearch) InsertOne(tableName string, d interface{}) (err error) {
+	// request indexing
+	dataJSON, err := json.Marshal(d)
+	js := string(dataJSON)
+
+	req := esapi.IndexRequest{
+		Index:   tableName,
+		Body:    strings.NewReader(js),
+		Refresh: "true",
+	}
+
+	res, err := req.Do(db.ctx, db.Client)
+
 	if err != nil {
-		return err
+		log.Fatalf("Error getting response: %s", err)
+	}
+	defer res.Body.Close()
+
+	if res.IsError() {
+		log.Printf("[%s] Error indexing document", res.Status())
+	} else {
+		var r types.ResponseES
+		if errJs := json.NewDecoder(res.Body).Decode(&r); errJs != nil {
+			log.Printf("Error parsing the response body: %s", errJs)
+		} else {
+			log.Printf("[%s] version=%d ID=%s Index=%s", res.Status(), r.Version, r.ID, r.Index)
+		}
 	}
 
 	return nil
 }
 
-func (db *MongoDB) InsertBatch(tableName string, d []interface{}) error {
-	collection := db.C.Collection(tableName)
-	_, err := collection.InsertMany(db.ctx, d)
-	if err != nil {
-		return err
+func (db *ElasticSearch) InsertBatch(tableName string, d []interface{}) error {
+
+	retryOnConflit := new(int)
+	*retryOnConflit = 3
+
+	// request indexing
+	indexer, _ := esutil.NewBulkIndexer(esutil.BulkIndexerConfig{
+		Index:  tableName,
+		Client: db.Client,
+	})
+
+	for _, a := range d {
+		dataJSON, err := json.Marshal(a)
+		if err != nil {
+			log.Fatalf("cannot encode bulk %s", err)
+		}
+
+		err = indexer.Add(
+			context.Background(),
+			esutil.BulkIndexerItem{
+				// Action field configures the operation to perform (index, create, delete, update)
+				Action: "index",
+
+				// DocumentID is the (optional) document ID
+
+				// Body is an `io.Reader` with the payload
+				Body: bytes.NewReader(dataJSON),
+
+				RetryOnConflict: retryOnConflit,
+
+				// OnSuccess is called for each successful operation
+				OnSuccess: func(ctx context.Context, item esutil.BulkIndexerItem, res esutil.BulkIndexerResponseItem) {
+					// SOMETHING
+				},
+
+				// OnFailure is called for each failed operation
+				OnFailure: func(ctx context.Context, item esutil.BulkIndexerItem, res esutil.BulkIndexerResponseItem, err error) {
+					if err != nil {
+						log.Printf("ERROR: %s", err)
+					} else {
+						log.Printf("ERROR: %s: %s", res.Error.Type, res.Error.Reason)
+					}
+				},
+			},
+		)
+		if err != nil {
+			log.Fatalf("Unexpected error: %s", err)
+		}
+	}
+
+	// Close the indexer
+	//
+	if err := indexer.Close(context.Background()); err != nil {
+		log.Fatalf("Unexpected error: %s", err)
 	}
 
 	return nil
 }
 
 // Get District using warehouseId and districtId and return pointer to models.District or error instead.
-func (db *MongoDB) IncrementDistrictOrderId(warehouseId int, districtId int) error {
-	filter := bson.D{
-		{"D_ID", districtId},
-		{"D_W_ID", warehouseId},
+func (db *ElasticSearch) IncrementDistrictOrderId(warehouseId int, districtId int) error {
+	var doc bytes.Buffer
+	documentUp := map[string]interface{}{
+		"scripts": "ctx._source.D_NEXT_O_ID += 1",
 	}
 
-	update := bson.D{
-		{"$inc", bson.D{
-			{"D_NEXT_O_ID", 1},
-		}},
+	if err := json.NewEncoder(&doc).Encode(documentUp); err != nil {
+		log.Fatalf("Error encoding query: %s", err)
 	}
 
-	u, err := db.C.Collection("DISTRICT").UpdateOne(db.ctx, filter, update, nil)
+	m := types.Must{}
+	m[0] = map[string]interface{}{
+		"D_ID": districtId,
+	}
 
+	m[1] = map[string]interface{}{
+		"D_W_ID": warehouseId,
+	}
+
+	var q types.BoolMustQuery
+
+	q.Query.Bool.Must = m
+
+	//!TODO: check version
+
+	indexes := [1]string{"DISTRICT"}
+
+	refresh := new(bool)
+	*refresh = true
+
+	qString, err := json.Marshal(q)
+
+	req := esapi.UpdateByQueryRequest{
+		Index:   indexes[:],
+		Body:    &doc,
+		Refresh: refresh,
+		Pretty:  true,
+		Query:   string(qString),
+	}
+
+	res, err := req.Do(db.ctx, db.Client)
 	if err != nil {
-		return err
+		log.Fatalf("Error getting response: %s", err)
 	}
 
-	if u.MatchedCount == 0 {
-		return fmt.Errorf("update of District document failed")
+	defer res.Body.Close()
+
+	if res.IsError() {
+		log.Printf("[%s] Error delete document", res.Status())
+	} else {
+		var r map[string]interface{}
+		if errJs := json.NewDecoder(res.Body).Decode(&r); errJs != nil {
+			log.Printf("Error parsing the response body: %s", errJs)
+		} else {
+			log.Printf("[%s] %s; version=%d", res.Status(), r["result"], int(r["_version"].(float64)))
+		}
 	}
 
 	return nil
 }
 
-
-// It also deletes new order, as MongoDB can do that findAndModify is set to 0
-func (db *MongoDB) GetNewOrder(warehouseId int, districtId int) (*models.NewOrder, error) {
+// It also deletes new order, as ElasticSearch can do that findAndModify is set to 0
+func (db *ElasticSearch) GetNewOrder(warehouseId int, districtId int) (*models.NewOrder, error) {
 	var NewOrder models.NewOrder
 	var err error
 
@@ -343,11 +417,11 @@ func (db *MongoDB) GetNewOrder(warehouseId int, districtId int) (*models.NewOrde
 
 	newOrderSort := bson.D{{"NO_O_ID", 1}}
 
-	if db.:quantity {
+	if db.findAndModify {
 		err = db.C.Collection("NEW_ORDER").FindOneAndDelete(
-		db.ctx,
-		filter,
-		options.FindOneAndDelete().SetSort(newOrderSort).SetProjection(newOrderProjection),
+			db.ctx,
+			filter,
+			options.FindOneAndDelete().SetSort(newOrderSort).SetProjection(newOrderProjection),
 		).Decode(&NewOrder)
 
 		if err != nil {
@@ -364,7 +438,7 @@ func (db *MongoDB) GetNewOrder(warehouseId int, districtId int) (*models.NewOrde
 	return &NewOrder, nil
 }
 
-func (db *MongoDB) DeleteNewOrder(orderId int, warehouseId int, districtId int) error {
+func (db *ElasticSearch) DeleteNewOrder(orderId int, warehouseId int, districtId int) error {
 	var err error
 
 	filter := bson.D{
@@ -377,7 +451,7 @@ func (db *MongoDB) DeleteNewOrder(orderId int, warehouseId int, districtId int) 
 		return nil
 	}
 
-	r,err := db.C.Collection("NEW_ORDER").DeleteOne(db.ctx, filter, nil)
+	r, err := db.C.Collection("NEW_ORDER").DeleteOne(db.ctx, filter, nil)
 
 	if err != nil {
 		return err
@@ -390,7 +464,7 @@ func (db *MongoDB) DeleteNewOrder(orderId int, warehouseId int, districtId int) 
 	return nil
 }
 
-func (db *MongoDB) GetCustomer(customerId int, warehouseId int, districtId int) (*models.Customer, error) {
+func (db *ElasticSearch) GetCustomer(customerId int, warehouseId int, districtId int) (*models.Customer, error) {
 	var err error
 
 	var c models.Customer
@@ -409,7 +483,7 @@ func (db *MongoDB) GetCustomer(customerId int, warehouseId int, districtId int) 
 }
 
 // GetCId
-func (db *MongoDB) GetCustomerIdOrder (orderId int, warehouseId int, districtId int) (int, error) {
+func (db *ElasticSearch) GetCustomerIdOrder(orderId int, warehouseId int, districtId int) (int, error) {
 	var err error
 
 	filter := bson.D{
@@ -434,7 +508,7 @@ func (db *MongoDB) GetCustomerIdOrder (orderId int, warehouseId int, districtId 
 	return int(doc["O_C_ID"].(int32)), nil
 }
 
-func (db *MongoDB) UpdateOrders(orderId int, warehouseId int, districtId int, oCarrierId int, deliveryDate time.Time) error {
+func (db *ElasticSearch) UpdateOrders(orderId int, warehouseId int, districtId int, oCarrierId int, deliveryDate time.Time) error {
 	var err error
 
 	filter := bson.D{
@@ -443,7 +517,7 @@ func (db *MongoDB) UpdateOrders(orderId int, warehouseId int, districtId int, oC
 		{"O_W_ID", warehouseId},
 	}
 
-	r,err := db.C.Collection("ORDERS").UpdateOne(db.ctx,
+	r, err := db.C.Collection("ORDERS").UpdateOne(db.ctx,
 		filter,
 		bson.D{
 			{"$set", bson.D{
@@ -463,8 +537,7 @@ func (db *MongoDB) UpdateOrders(orderId int, warehouseId int, districtId int, oC
 	return nil
 }
 
-
-func (db *MongoDB) SumOLAmount(orderId int, warehouseId int, districtId int) (float64, error) {
+func (db *ElasticSearch) SumOLAmount(orderId int, warehouseId int, districtId int) (float64, error) {
 	var err error
 
 	match := bson.D{
@@ -488,7 +561,7 @@ func (db *MongoDB) SumOLAmount(orderId int, warehouseId int, districtId int) (fl
 		}},
 	}
 
-	cursor, err := db.C.Collection("ORDERS").Aggregate(db.ctx,mongo.Pipeline{match, unwind, group})
+	cursor, err := db.C.Collection("ORDERS").Aggregate(db.ctx, mongo.Pipeline{match, unwind, group})
 	defer cursor.Close(db.ctx)
 	if err != nil {
 		return 0, err
@@ -506,7 +579,7 @@ func (db *MongoDB) SumOLAmount(orderId int, warehouseId int, districtId int) (fl
 
 }
 
-func (db *MongoDB) UpdateCustomer(customerId int, warehouseId int, districtId int, sumOlTotal float64) error {
+func (db *ElasticSearch) UpdateCustomer(customerId int, warehouseId int, districtId int, sumOlTotal float64) error {
 	var err error
 
 	r, err := db.C.Collection("CUSTOMER").UpdateOne(db.ctx,
@@ -534,9 +607,7 @@ func (db *MongoDB) UpdateCustomer(customerId int, warehouseId int, districtId in
 	return nil
 }
 
-
-func (db *MongoDB) GetNextOrderId(warehouseId int, districtId int) (int, error) {
-
+func (db *ElasticSearch) GetNextOrderId(warehouseId int, districtId int) (int, error) {
 
 	var oid bson.M
 	var query = &bson.D{
@@ -559,7 +630,7 @@ func (db *MongoDB) GetNextOrderId(warehouseId int, districtId int) (int, error) 
 	return int(oid["D_NEXT_O_ID"].(int32)), nil
 }
 
-func (db *MongoDB) GetStockCount(orderIdLt int, orderIdGt int, threshold int, warehouseId int, districtId int) (int64, error) {
+func (db *ElasticSearch) GetStockCount(orderIdLt int, orderIdGt int, threshold int, warehouseId int, districtId int) (int64, error) {
 
 	cursor, err := db.C.Collection("ORDERS").Find(db.ctx,
 		bson.D{
@@ -596,7 +667,7 @@ func (db *MongoDB) GetStockCount(orderIdLt int, orderIdGt int, threshold int, wa
 		{"S_I_ID", bson.D{
 			{"$in", orderIds},
 		}},
-		{"S_QUANTITY", bson.D {
+		{"S_QUANTITY", bson.D{
 			{"$lt", threshold},
 		}},
 	})
@@ -608,7 +679,7 @@ func (db *MongoDB) GetStockCount(orderIdLt int, orderIdGt int, threshold int, wa
 	return c, nil
 }
 
-func (db *MongoDB) GetCustomerById(customerId int, warehouseId int, districtId int) (*models.Customer, error) {
+func (db *ElasticSearch) GetCustomerById(customerId int, warehouseId int, districtId int) (*models.Customer, error) {
 
 	var err error
 	var customer models.Customer
@@ -635,7 +706,7 @@ func (db *MongoDB) GetCustomerById(customerId int, warehouseId int, districtId i
 	return &customer, nil
 }
 
-func (db *MongoDB) GetCustomerByName(name string, warehouseId int, districtId int) (*models.Customer, error) {
+func (db *ElasticSearch) GetCustomerByName(name string, warehouseId int, districtId int) (*models.Customer, error) {
 
 	var customer models.Customer
 
@@ -677,7 +748,7 @@ func (db *MongoDB) GetCustomerByName(name string, warehouseId int, districtId in
 	return &customer, nil
 }
 
-func (db *MongoDB) GetLastOrder(customerId int, warehouseId int, districtId int) (*models.Order, error) {
+func (db *ElasticSearch) GetLastOrder(customerId int, warehouseId int, districtId int) (*models.Order, error) {
 	var err error
 	var order models.Order
 
@@ -703,7 +774,7 @@ func (db *MongoDB) GetLastOrder(customerId int, warehouseId int, districtId int)
 	return &order, nil
 }
 
-func (db *MongoDB) GetOrderLines(orderId int, warehouseId int, districtId int) (*[]models.OrderLine, error) {
+func (db *ElasticSearch) GetOrderLines(orderId int, warehouseId int, districtId int) (*[]models.OrderLine, error) {
 	var err error
 	var order models.Order
 
@@ -725,7 +796,7 @@ func (db *MongoDB) GetOrderLines(orderId int, warehouseId int, districtId int) (
 	return &order.ORDER_LINE, nil
 }
 
-func (db *MongoDB) GetWarehouse(warehouseId int) (*models.Warehouse, error) {
+func (db *ElasticSearch) GetWarehouse(warehouseId int) (*models.Warehouse, error) {
 
 	var err error
 
@@ -753,7 +824,7 @@ func (db *MongoDB) GetWarehouse(warehouseId int) (*models.Warehouse, error) {
 	return &warehouse, nil
 }
 
-func (db *MongoDB) UpdateWarehouseBalance(warehouseId int, amount float64) error {
+func (db *ElasticSearch) UpdateWarehouseBalance(warehouseId int, amount float64) error {
 
 	r, err := db.C.Collection("WAREHOUSE").UpdateOne(db.ctx, bson.D{
 		{"W_ID", warehouseId},
@@ -776,9 +847,7 @@ func (db *MongoDB) UpdateWarehouseBalance(warehouseId int, amount float64) error
 	return nil
 }
 
-
-
-func (db *MongoDB) GetDistrict(warehouseId int, districtId int) (*models.District, error) {
+func (db *ElasticSearch) GetDistrict(warehouseId int, districtId int) (*models.District, error) {
 	var err error
 
 	var district models.District
@@ -795,7 +864,7 @@ func (db *MongoDB) GetDistrict(warehouseId int, districtId int) (*models.Distric
 	return &district, nil
 }
 
-func (db *MongoDB) UpdateDistrictBalance(warehouseId int, districtId int, amount float64) error {
+func (db *ElasticSearch) UpdateDistrictBalance(warehouseId int, districtId int, amount float64) error {
 	filter := bson.D{
 		{"D_ID", districtId},
 		{"D_W_ID", warehouseId},
@@ -807,7 +876,7 @@ func (db *MongoDB) UpdateDistrictBalance(warehouseId int, districtId int, amount
 		}},
 	}
 
-	r,err := db.C.Collection("DISTRICT").UpdateOne(db.ctx, filter, update, nil)
+	r, err := db.C.Collection("DISTRICT").UpdateOne(db.ctx, filter, update, nil)
 
 	if r.MatchedCount == 0 {
 		return fmt.Errorf("No district found")
@@ -820,7 +889,7 @@ func (db *MongoDB) UpdateDistrictBalance(warehouseId int, districtId int, amount
 	return nil
 }
 
-func (db *MongoDB) InsertHistory(
+func (db *ElasticSearch) InsertHistory(
 	warehouseId int,
 	districtId int,
 	date time.Time,
@@ -841,12 +910,12 @@ func (db *MongoDB) InsertHistory(
 	return err
 }
 
-func (db *MongoDB) UpdateCredit(customerId int, warehouseId int, districtId int, balance float64, data string) error {
+func (db *ElasticSearch) UpdateCredit(customerId int, warehouseId int, districtId int, balance float64, data string) error {
 	//updateBCCustomer
 	var err error
-	update :=  bson.D{
+	update := bson.D{
 		{"$inc", bson.D{
-			{"C_BALANCE", -1* balance},
+			{"C_BALANCE", -1 * balance},
 			{"C_YTD_PAYMENT", balance},
 			{"C_PAYMENT_CNT", 1},
 		}},
@@ -873,7 +942,7 @@ func (db *MongoDB) UpdateCredit(customerId int, warehouseId int, districtId int,
 	return nil
 }
 
-func (db *MongoDB) CreateOrder(
+func (db *ElasticSearch) CreateOrder(
 	orderId int,
 	customerId int,
 	warehouseId int,
@@ -918,7 +987,7 @@ func (db *MongoDB) CreateOrder(
 }
 
 //todo: sharding
-func (db *MongoDB) GetItems(itemIds []int) (*[]models.Item, error) {
+func (db *ElasticSearch) GetItems(itemIds []int) (*[]models.Item, error) {
 
 	cursor, err := db.C.Collection("ITEM").Find(db.ctx, bson.D{
 		{"I_ID", bson.D{
@@ -947,7 +1016,7 @@ func (db *MongoDB) GetItems(itemIds []int) (*[]models.Item, error) {
 	return &items, nil
 }
 
-func (db *MongoDB) GetStockInfo(districtId int, iIds []int, iWids []int, allLocal int) (*[]models.Stock, error) {
+func (db *ElasticSearch) GetStockInfo(districtId int, iIds []int, iWids []int, allLocal int) (*[]models.Stock, error) {
 	var err error
 	distCol := fmt.Sprintf("S_DIST_%02d", districtId)
 	stockProjection := bson.D{
@@ -986,8 +1055,7 @@ func (db *MongoDB) GetStockInfo(districtId int, iIds []int, iWids []int, allLoca
 		cursor, err = db.C.Collection("STOCK").Find(db.ctx,
 			bson.D{
 				{"$or", searchList},
-
-			},options.Find().SetProjection(stockProjection))
+			}, options.Find().SetProjection(stockProjection))
 
 		if err != nil {
 			return nil, err
@@ -1004,7 +1072,7 @@ func (db *MongoDB) GetStockInfo(districtId int, iIds []int, iWids []int, allLoca
 	return &stocks, nil
 }
 
-func (db *MongoDB) UpdateStock(stockId int, warehouseId int, quantity int, ytd int, ordercnt int, remotecnt int ) error {
+func (db *ElasticSearch) UpdateStock(stockId int, warehouseId int, quantity int, ytd int, ordercnt int, remotecnt int) error {
 	ru, err := db.C.Collection("STOCK").UpdateOne(db.ctx,
 		bson.D{
 			{"S_I_ID", stockId},
@@ -1030,4 +1098,3 @@ func (db *MongoDB) UpdateStock(stockId int, warehouseId int, quantity int, ytd i
 
 	return nil
 }
-

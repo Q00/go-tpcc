@@ -13,7 +13,7 @@ var cfgFile string
 
 var rootCmd = &cobra.Command{
 	Use:   "go-tpcc",
-	Short: "TPC-C implementation for various databases. Currently only MongoDB is supported",
+	Short: "TPC-C implementation for various databases. Currently only MongoDB, ElasticSearch is supported",
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.

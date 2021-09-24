@@ -2,16 +2,17 @@ package executor
 
 import (
 	"fmt"
+	"time"
+
 	"github.com/Percona-Lab/go-tpcc/databases"
 	"github.com/Percona-Lab/go-tpcc/tpcc/models"
-	"time"
 )
 
 type Executor struct {
-	batchSize int
-	data map[string][]interface{}
-	db databases.Database
-	retries int
+	batchSize   int
+	data        map[string][]interface{}
+	db          databases.Database
+	retries     int
 	transaction bool
 }
 
@@ -19,12 +20,11 @@ const DefaultRetries = 10
 
 func NewExecutor(db databases.Database, batchSize int) (*Executor, error) {
 
-
-	return &Executor {
-		batchSize: 512,
-		data:      make(map[string][]interface{}),
-		db:        db,
-		retries:   DefaultRetries,
+	return &Executor{
+		batchSize:   512,
+		data:        make(map[string][]interface{}),
+		db:          db,
+		retries:     DefaultRetries,
 		transaction: false,
 	}, nil
 }
@@ -43,8 +43,8 @@ func (e *Executor) ChangeRetries(r int) {
 func (e *Executor) SaveBatch(collectionName string, d interface{}) error {
 	e.data[collectionName] = append(e.data[collectionName], d)
 
-	if len(e.data[collectionName]) % e.batchSize == 0 {
-		err := e.db.InsertBatch(collectionName,e.data[collectionName])
+	if len(e.data[collectionName])%e.batchSize == 0 {
+		err := e.db.InsertBatch(collectionName, e.data[collectionName])
 		if err != nil {
 			return err
 		}
@@ -55,7 +55,7 @@ func (e *Executor) SaveBatch(collectionName string, d interface{}) error {
 }
 
 func (e *Executor) Flush(collectionName string) error {
-	err := e.db.InsertBatch(collectionName,e.data[collectionName])
+	err := e.db.InsertBatch(collectionName, e.data[collectionName])
 	if err != nil {
 		return err
 	}
@@ -72,16 +72,14 @@ func (e *Executor) Save(collectionName string, d interface{}) error {
 	return nil
 }
 
-
 func (e *Executor) DoTrxRetries(fn func() error) error {
 	var err error
 
 	retries := e.retries
 
-	if ! e.transaction {
+	if !e.transaction {
 		retries = 1
 	}
-
 
 	for i := 0; i < retries; i++ {
 		err = nil
@@ -132,7 +130,6 @@ func (e *Executor) DoStockLevelTrx(warehouseId int, districtId int, threshold in
 	return nil
 }
 
-
 func (e *Executor) DoDeliveryTrx(wId int, oCarrierId int, olDeliveryD time.Time, dId int) error {
 	return e.DoTrxRetries(func() error {
 		for i := 1; i <= dId; i++ {
@@ -153,7 +150,7 @@ func (e *Executor) DoDelivery(wId int, oCarrierId int, olDeliveryD time.Time, dI
 
 	no, err := e.db.GetNewOrder(wId, dId)
 	if err != nil {
-		fmt.Println("WID=",wId, " DID=",dId)
+		fmt.Println("WID=", wId, " DID=", dId)
 		return err
 	}
 
@@ -208,9 +205,8 @@ func (e *Executor) DoOrderStatus(warehouseId, districtId, cId int, cLast string)
 		if err != nil {
 			return err
 		}
-		cId =  customer.C_ID
+		cId = customer.C_ID
 	}
-
 
 	if err != nil {
 		return err
@@ -244,7 +240,7 @@ func (e *Executor) DoPaymentTrx(warehouseId, districtId int,
 			cWId, cDId, cId,
 			cLast,
 			hDate,
-			badCredit ,
+			badCredit,
 			cdatalen)
 	})
 }
@@ -300,8 +296,6 @@ func (e *Executor) DoPayment(
 	if err != nil {
 		return err
 	}
-
-
 
 	if customer.C_CREDIT == badCredit {
 		var buf string
@@ -363,7 +357,6 @@ func (e *Executor) DoNewOrder(wId, dId, cId int, oEntryD time.Time, iIds []int, 
 		return err
 	}
 
-
 	allLocal := 1
 	for _, item := range iWids {
 		if item != wId {
@@ -381,7 +374,6 @@ func (e *Executor) DoNewOrder(wId, dId, cId int, oEntryD time.Time, iIds []int, 
 		return fmt.Errorf("TPCC defines 1%% of neworder gives a wrong itemid, causing rollback. This happens on purpose")
 	}
 
-
 	stocks, err := e.db.GetStockInfo(dId, iIds, iWids, allLocal)
 	if err != nil {
 		return err
@@ -393,39 +385,42 @@ func (e *Executor) DoNewOrder(wId, dId, cId int, oEntryD time.Time, iIds []int, 
 
 	var orderLines []models.OrderLine
 
-	for i:=0; i < len(iIds); i++ {
+	for i := 0; i < len(iIds); i++ {
 		sQuantity := (*stocks)[i].S_QUANTITY
 
-
-		if sQuantity >= 10 + iQtys[i] {
-			sQuantity -=  iQtys[0]
+		if sQuantity >= 10+iQtys[i] {
+			sQuantity -= iQtys[0]
 		} else {
 			sQuantity += 91 - iQtys[0]
 		}
 
-		if iWids[i] != wId {
-			err = e.db.UpdateStock(
-				(*stocks)[i].S_I_ID,
-				iWids[1],
-				sQuantity,
-				(*stocks)[i].S_YTD + iQtys[i],
-				(*stocks)[i].S_ORDER_CNT + 1,
-				(*stocks)[i].S_REMOTE_CNT + 1,
-			)
+		S_REMOTE_CNT := (*stocks)[i].S_REMOTE_CNT
 
-			if err != nil {
-				return err
-			}
+		if iWids[i] != wId {
+			S_REMOTE_CNT += 1
+		}
+
+		err = e.db.UpdateStock(
+			(*stocks)[i].S_I_ID,
+			iWids[1],
+			sQuantity,
+			(*stocks)[i].S_YTD+iQtys[i],
+			(*stocks)[i].S_ORDER_CNT+1,
+			S_REMOTE_CNT,
+		)
+
+		if err != nil {
+			return err
 		}
 
 		orderLines = append(orderLines, models.OrderLine{
 			OL_O_ID:        district.D_NEXT_O_ID,
-			OL_NUMBER:      i+1,
+			OL_NUMBER:      i + 1,
 			OL_I_ID:        iIds[i],
 			OL_SUPPLY_W_ID: iWids[i],
 			OL_DELIVERY_D:  oEntryD,
 			OL_QUANTITY:    iQtys[i],
-			OL_AMOUNT:      (*items)[i].I_PRICE*float64(iQtys[i]),
+			OL_AMOUNT:      (*items)[i].I_PRICE * float64(iQtys[i]),
 			OL_DIST_INFO:   distCol(dId, &(*stocks)[i]),
 		})
 	}

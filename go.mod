@@ -1,6 +1,8 @@
 module github.com/Percona-Lab/go-tpcc
 
 require (
+	github.com/elastic/go-elasticsearch v0.0.0 // indirect
+	github.com/elastic/go-elasticsearch/v7 v7.14.0
 	github.com/go-sql-driver/mysql v1.5.0
 	github.com/jackc/pgconn v1.7.0
 	github.com/jackc/pgx/v4 v4.9.0
