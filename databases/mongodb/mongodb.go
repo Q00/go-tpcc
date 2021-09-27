@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"time"
+
 	"github.com/Percona-Lab/go-tpcc/tpcc/models"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -13,15 +14,15 @@ import (
 )
 
 type MongoDB struct {
-	Client *mongo.Client
-	C *mongo.Database
-	Aggregate bool
+	Client        *mongo.Client
+	C             *mongo.Database
+	Aggregate     bool
 	findAndModify bool
-	transactions bool
-	ctx mongo.SessionContext
+	transactions  bool
+	ctx           mongo.SessionContext
 }
 
-func NewMongoDb(uri string, dbname string, transactions bool, findandmodify bool) (*MongoDB, error){
+func NewMongoDb(uri string, dbname string, transactions bool, findandmodify bool) (*MongoDB, error) {
 	client, err := mongo.NewClient(options.Client().ApplyURI(uri))
 
 	if err != nil {
@@ -40,21 +41,19 @@ func NewMongoDb(uri string, dbname string, transactions bool, findandmodify bool
 		return nil, err
 	}
 
-
 	session, err := client.StartSession()
 
 	if err != nil {
 		return nil, err
 	}
 
-
 	return &MongoDB{
-		Client: client,
-		C: client.Database(dbname),
-		Aggregate: false,
-		transactions: transactions,
+		Client:        client,
+		C:             client.Database(dbname),
+		Aggregate:     false,
+		transactions:  transactions,
 		findAndModify: findandmodify,
-		ctx: mongo.NewSessionContext(context.Background(), session),
+		ctx:           mongo.NewSessionContext(context.Background(), session),
 	}, nil
 }
 
@@ -63,7 +62,7 @@ func (db *MongoDB) CreateSchema() error {
 }
 
 func (db *MongoDB) StartTrx() error {
-	sess :=  mongo.SessionFromContext(db.ctx)
+	sess := mongo.SessionFromContext(db.ctx)
 	err := sess.StartTransaction()
 	if err != nil {
 		return err
@@ -73,7 +72,7 @@ func (db *MongoDB) StartTrx() error {
 }
 
 func (db *MongoDB) CommitTrx() error {
-	sess :=  mongo.SessionFromContext(db.ctx)
+	sess := mongo.SessionFromContext(db.ctx)
 	err := sess.CommitTransaction(db.ctx)
 	if err != nil {
 		return err
@@ -83,7 +82,7 @@ func (db *MongoDB) CommitTrx() error {
 }
 
 func (db *MongoDB) RollbackTrx() error {
-	sess :=  mongo.SessionFromContext(db.ctx)
+	sess := mongo.SessionFromContext(db.ctx)
 	err := sess.AbortTransaction(db.ctx)
 	if err != nil {
 		return err
@@ -146,7 +145,7 @@ func (db *MongoDB) CreateIndexes() error {
 			},
 		},
 		{
-			Keys: bsonx.Doc {
+			Keys: bsonx.Doc{
 				{"C_W_ID", ascending},
 				{"C_D_ID", ascending},
 				{"C_LAST", ascending},
@@ -202,7 +201,6 @@ func (db *MongoDB) CreateIndexes() error {
 		return err
 	}
 
-
 	_, err = db.C.Collection("NEW_ORDER").Indexes().CreateMany(context.Background(), []mongo.IndexModel{
 		{
 			Keys: bsonx.Doc{
@@ -233,7 +231,6 @@ func (db *MongoDB) CreateIndexes() error {
 				{"OL_W_ID", ascending},
 				{"OL_I_ID", descending},
 				{"OL_AMOUNT", ascending},
-
 			},
 		},
 	})
@@ -245,7 +242,7 @@ func (db *MongoDB) CreateIndexes() error {
 	return nil
 }
 
-func (db *MongoDB) InsertOne(tableName string, d interface{}) error {
+func (db *MongoDB) InsertOne(ctx context.Context, tableName string, d interface{}) error {
 	collection := db.C.Collection(tableName)
 	_, err := collection.InsertOne(db.ctx, d)
 	if err != nil {
@@ -255,7 +252,7 @@ func (db *MongoDB) InsertOne(tableName string, d interface{}) error {
 	return nil
 }
 
-func (db *MongoDB) InsertBatch(tableName string, d []interface{}) error {
+func (db *MongoDB) InsertBatch(ctx context.Context, tableName string, d []interface{}) error {
 	collection := db.C.Collection(tableName)
 	_, err := collection.InsertMany(db.ctx, d)
 	if err != nil {
@@ -266,7 +263,7 @@ func (db *MongoDB) InsertBatch(tableName string, d []interface{}) error {
 }
 
 // Get District using warehouseId and districtId and return pointer to models.District or error instead.
-func (db *MongoDB) IncrementDistrictOrderId(warehouseId int, districtId int) error {
+func (db *MongoDB) IncrementDistrictOrderId(ctx context.Context, warehouseId int, districtId int) error {
 	filter := bson.D{
 		{"D_ID", districtId},
 		{"D_W_ID", warehouseId},
@@ -291,9 +288,8 @@ func (db *MongoDB) IncrementDistrictOrderId(warehouseId int, districtId int) err
 	return nil
 }
 
-
 // It also deletes new order, as MongoDB can do that findAndModify is set to 0
-func (db *MongoDB) GetNewOrder(warehouseId int, districtId int) (*models.NewOrder, error) {
+func (db *MongoDB) GetNewOrder(ctx context.Context, warehouseId int, districtId int) (*models.NewOrder, error) {
 	var NewOrder models.NewOrder
 	var err error
 
@@ -332,7 +328,7 @@ func (db *MongoDB) GetNewOrder(warehouseId int, districtId int) (*models.NewOrde
 	return &NewOrder, nil
 }
 
-func (db *MongoDB) DeleteNewOrder(orderId int, warehouseId int, districtId int) error {
+func (db *MongoDB) DeleteNewOrder(ctx context.Context, orderId int, warehouseId int, districtId int) error {
 	var err error
 
 	filter := bson.D{
@@ -345,7 +341,7 @@ func (db *MongoDB) DeleteNewOrder(orderId int, warehouseId int, districtId int) 
 		return nil
 	}
 
-	r,err := db.C.Collection("NEW_ORDER").DeleteOne(db.ctx, filter, nil)
+	r, err := db.C.Collection("NEW_ORDER").DeleteOne(db.ctx, filter, nil)
 
 	if err != nil {
 		return err
@@ -358,7 +354,7 @@ func (db *MongoDB) DeleteNewOrder(orderId int, warehouseId int, districtId int) 
 	return nil
 }
 
-func (db *MongoDB) GetCustomer(customerId int, warehouseId int, districtId int) (*models.Customer, error) {
+func (db *MongoDB) GetCustomer(ctx context.Context, customerId int, warehouseId int, districtId int) (*models.Customer, error) {
 	var err error
 
 	var c models.Customer
@@ -377,7 +373,7 @@ func (db *MongoDB) GetCustomer(customerId int, warehouseId int, districtId int) 
 }
 
 // GetCId
-func (db *MongoDB) GetCustomerIdOrder (orderId int, warehouseId int, districtId int) (int, error) {
+func (db *MongoDB) GetCustomerIdOrder(ctx context.Context, orderId int, warehouseId int, districtId int) (int, error) {
 	var err error
 
 	filter := bson.D{
@@ -402,7 +398,7 @@ func (db *MongoDB) GetCustomerIdOrder (orderId int, warehouseId int, districtId 
 	return int(doc["O_C_ID"].(int32)), nil
 }
 
-func (db *MongoDB) UpdateOrders(orderId int, warehouseId int, districtId int, oCarrierId int, deliveryDate time.Time) error {
+func (db *MongoDB) UpdateOrders(ctx context.Context, orderId int, warehouseId int, districtId int, oCarrierId int, deliveryDate time.Time) error {
 	var err error
 
 	filter := bson.D{
@@ -411,7 +407,7 @@ func (db *MongoDB) UpdateOrders(orderId int, warehouseId int, districtId int, oC
 		{"O_W_ID", warehouseId},
 	}
 
-	r,err := db.C.Collection("ORDERS").UpdateOne(db.ctx,
+	r, err := db.C.Collection("ORDERS").UpdateOne(db.ctx,
 		filter,
 		bson.D{
 			{"$set", bson.D{
@@ -431,8 +427,7 @@ func (db *MongoDB) UpdateOrders(orderId int, warehouseId int, districtId int, oC
 	return nil
 }
 
-
-func (db *MongoDB) SumOLAmount(orderId int, warehouseId int, districtId int) (float64, error) {
+func (db *MongoDB) SumOLAmount(ctx context.Context, orderId int, warehouseId int, districtId int) (float64, error) {
 	var err error
 
 	match := bson.D{
@@ -456,7 +451,7 @@ func (db *MongoDB) SumOLAmount(orderId int, warehouseId int, districtId int) (fl
 		}},
 	}
 
-	cursor, err := db.C.Collection("ORDERS").Aggregate(db.ctx,mongo.Pipeline{match, unwind, group})
+	cursor, err := db.C.Collection("ORDERS").Aggregate(db.ctx, mongo.Pipeline{match, unwind, group})
 	defer cursor.Close(db.ctx)
 	if err != nil {
 		return 0, err
@@ -474,7 +469,7 @@ func (db *MongoDB) SumOLAmount(orderId int, warehouseId int, districtId int) (fl
 
 }
 
-func (db *MongoDB) UpdateCustomer(customerId int, warehouseId int, districtId int, sumOlTotal float64) error {
+func (db *MongoDB) UpdateCustomer(ctx context.Context, customerId int, warehouseId int, districtId int, sumOlTotal float64) error {
 	var err error
 
 	r, err := db.C.Collection("CUSTOMER").UpdateOne(db.ctx,
@@ -502,9 +497,7 @@ func (db *MongoDB) UpdateCustomer(customerId int, warehouseId int, districtId in
 	return nil
 }
 
-
-func (db *MongoDB) GetNextOrderId(warehouseId int, districtId int) (int, error) {
-
+func (db *MongoDB) GetNextOrderId(ctx context.Context, warehouseId int, districtId int) (int, error) {
 
 	var oid bson.M
 	var query = &bson.D{
@@ -527,7 +520,7 @@ func (db *MongoDB) GetNextOrderId(warehouseId int, districtId int) (int, error) 
 	return int(oid["D_NEXT_O_ID"].(int32)), nil
 }
 
-func (db *MongoDB) GetStockCount(orderIdLt int, orderIdGt int, threshold int, warehouseId int, districtId int) (int64, error) {
+func (db *MongoDB) GetStockCount(ctx context.Context, orderIdLt int, orderIdGt int, threshold int, warehouseId int, districtId int) (int64, error) {
 
 	cursor, err := db.C.Collection("ORDERS").Find(db.ctx,
 		bson.D{
@@ -564,7 +557,7 @@ func (db *MongoDB) GetStockCount(orderIdLt int, orderIdGt int, threshold int, wa
 		{"S_I_ID", bson.D{
 			{"$in", orderIds},
 		}},
-		{"S_QUANTITY", bson.D {
+		{"S_QUANTITY", bson.D{
 			{"$lt", threshold},
 		}},
 	})
@@ -576,7 +569,7 @@ func (db *MongoDB) GetStockCount(orderIdLt int, orderIdGt int, threshold int, wa
 	return c, nil
 }
 
-func (db *MongoDB) GetCustomerById(customerId int, warehouseId int, districtId int) (*models.Customer, error) {
+func (db *MongoDB) GetCustomerById(ctx context.Context, customerId int, warehouseId int, districtId int) (*models.Customer, error) {
 
 	var err error
 	var customer models.Customer
@@ -603,7 +596,7 @@ func (db *MongoDB) GetCustomerById(customerId int, warehouseId int, districtId i
 	return &customer, nil
 }
 
-func (db *MongoDB) GetCustomerByName(name string, warehouseId int, districtId int) (*models.Customer, error) {
+func (db *MongoDB) GetCustomerByName(ctx context.Context, name string, warehouseId int, districtId int) (*models.Customer, error) {
 
 	var customer models.Customer
 
@@ -645,7 +638,7 @@ func (db *MongoDB) GetCustomerByName(name string, warehouseId int, districtId in
 	return &customer, nil
 }
 
-func (db *MongoDB) GetLastOrder(customerId int, warehouseId int, districtId int) (*models.Order, error) {
+func (db *MongoDB) GetLastOrder(ctx context.Context, customerId int, warehouseId int, districtId int) (*models.Order, error) {
 	var err error
 	var order models.Order
 
@@ -671,7 +664,7 @@ func (db *MongoDB) GetLastOrder(customerId int, warehouseId int, districtId int)
 	return &order, nil
 }
 
-func (db *MongoDB) GetOrderLines(orderId int, warehouseId int, districtId int) (*[]models.OrderLine, error) {
+func (db *MongoDB) GetOrderLines(ctx context.Context, orderId int, warehouseId int, districtId int) (*[]models.OrderLine, error) {
 	var err error
 	var order models.Order
 
@@ -693,7 +686,7 @@ func (db *MongoDB) GetOrderLines(orderId int, warehouseId int, districtId int) (
 	return &order.ORDER_LINE, nil
 }
 
-func (db *MongoDB) GetWarehouse(warehouseId int) (*models.Warehouse, error) {
+func (db *MongoDB) GetWarehouse(ctx context.Context, warehouseId int) (*models.Warehouse, error) {
 
 	var err error
 
@@ -721,7 +714,7 @@ func (db *MongoDB) GetWarehouse(warehouseId int) (*models.Warehouse, error) {
 	return &warehouse, nil
 }
 
-func (db *MongoDB) UpdateWarehouseBalance(warehouseId int, amount float64) error {
+func (db *MongoDB) UpdateWarehouseBalance(ctx context.Context, warehouseId int, amount float64) error {
 
 	r, err := db.C.Collection("WAREHOUSE").UpdateOne(db.ctx, bson.D{
 		{"W_ID", warehouseId},
@@ -744,9 +737,7 @@ func (db *MongoDB) UpdateWarehouseBalance(warehouseId int, amount float64) error
 	return nil
 }
 
-
-
-func (db *MongoDB) GetDistrict(warehouseId int, districtId int) (*models.District, error) {
+func (db *MongoDB) GetDistrict(ctx context.Context, warehouseId int, districtId int) (*models.District, error) {
 	var err error
 
 	var district models.District
@@ -763,7 +754,7 @@ func (db *MongoDB) GetDistrict(warehouseId int, districtId int) (*models.Distric
 	return &district, nil
 }
 
-func (db *MongoDB) UpdateDistrictBalance(warehouseId int, districtId int, amount float64) error {
+func (db *MongoDB) UpdateDistrictBalance(ctx context.Context, warehouseId int, districtId int, amount float64) error {
 	filter := bson.D{
 		{"D_ID", districtId},
 		{"D_W_ID", warehouseId},
@@ -775,7 +766,7 @@ func (db *MongoDB) UpdateDistrictBalance(warehouseId int, districtId int, amount
 		}},
 	}
 
-	r,err := db.C.Collection("DISTRICT").UpdateOne(db.ctx, filter, update, nil)
+	r, err := db.C.Collection("DISTRICT").UpdateOne(db.ctx, filter, update, nil)
 
 	if r.MatchedCount == 0 {
 		return fmt.Errorf("No district found")
@@ -788,7 +779,7 @@ func (db *MongoDB) UpdateDistrictBalance(warehouseId int, districtId int, amount
 	return nil
 }
 
-func (db *MongoDB) InsertHistory(
+func (db *MongoDB) InsertHistory(ctx context.Context,
 	warehouseId int,
 	districtId int,
 	date time.Time,
@@ -809,12 +800,12 @@ func (db *MongoDB) InsertHistory(
 	return err
 }
 
-func (db *MongoDB) UpdateCredit(customerId int, warehouseId int, districtId int, balance float64, data string) error {
+func (db *MongoDB) UpdateCredit(ctx context.Context, customerId int, warehouseId int, districtId int, balance float64, data string) error {
 	//updateBCCustomer
 	var err error
-	update :=  bson.D{
+	update := bson.D{
 		{"$inc", bson.D{
-			{"C_BALANCE", -1* balance},
+			{"C_BALANCE", -1 * balance},
 			{"C_YTD_PAYMENT", balance},
 			{"C_PAYMENT_CNT", 1},
 		}},
@@ -841,7 +832,7 @@ func (db *MongoDB) UpdateCredit(customerId int, warehouseId int, districtId int,
 	return nil
 }
 
-func (db *MongoDB) CreateOrder(
+func (db *MongoDB) CreateOrder(ctx context.Context,
 	orderId int,
 	customerId int,
 	warehouseId int,
@@ -886,7 +877,7 @@ func (db *MongoDB) CreateOrder(
 }
 
 //todo: sharding
-func (db *MongoDB) GetItems(itemIds []int) (*[]models.Item, error) {
+func (db *MongoDB) GetItems(ctx context.Context, itemIds []int) (*[]models.Item, error) {
 
 	cursor, err := db.C.Collection("ITEM").Find(db.ctx, bson.D{
 		{"I_ID", bson.D{
@@ -915,7 +906,7 @@ func (db *MongoDB) GetItems(itemIds []int) (*[]models.Item, error) {
 	return &items, nil
 }
 
-func (db *MongoDB) GetStockInfo(districtId int, iIds []int, iWids []int, allLocal int) (*[]models.Stock, error) {
+func (db *MongoDB) GetStockInfo(ctx context.Context, districtId int, iIds []int, iWids []int, allLocal int) (*[]models.Stock, error) {
 	var err error
 	distCol := fmt.Sprintf("S_DIST_%02d", districtId)
 	stockProjection := bson.D{
@@ -954,8 +945,7 @@ func (db *MongoDB) GetStockInfo(districtId int, iIds []int, iWids []int, allLoca
 		cursor, err = db.C.Collection("STOCK").Find(db.ctx,
 			bson.D{
 				{"$or", searchList},
-
-			},options.Find().SetProjection(stockProjection))
+			}, options.Find().SetProjection(stockProjection))
 
 		if err != nil {
 			return nil, err
@@ -972,7 +962,7 @@ func (db *MongoDB) GetStockInfo(districtId int, iIds []int, iWids []int, allLoca
 	return &stocks, nil
 }
 
-func (db *MongoDB) UpdateStock(stockId int, warehouseId int, quantity int, ytd int, ordercnt int, remotecnt int ) error {
+func (db *MongoDB) UpdateStock(ctx context.Context, stockId int, warehouseId int, quantity int, ytd int, ordercnt int, remotecnt int) error {
 	ru, err := db.C.Collection("STOCK").UpdateOne(db.ctx,
 		bson.D{
 			{"S_I_ID", stockId},
@@ -998,4 +988,3 @@ func (db *MongoDB) UpdateStock(stockId int, warehouseId int, quantity int, ytd i
 
 	return nil
 }
-

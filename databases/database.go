@@ -1,6 +1,7 @@
 package databases
 
 import (
+	"context"
 	"time"
 
 	"github.com/Percona-Lab/go-tpcc/databases/elasticsearch"
@@ -16,32 +17,32 @@ type Database interface {
 	RollbackTrx() error
 	CreateSchema() error
 	CreateIndexes() error
-	InsertOne(tableName string, d interface{}) error
-	InsertBatch(tableName string, d []interface{}) error
-	IncrementDistrictOrderId(warehouseId int, districtId int) error
-	GetNewOrder(warehouseId int, districtId int) (*models.NewOrder, error)
-	DeleteNewOrder(orderId int, warehouseId int, districtId int) error
-	GetCustomer(customerId int, warehouseId int, districtId int) (*models.Customer, error)
-	GetCustomerIdOrder(orderId int, warehouseId int, districtId int) (int, error)
-	UpdateOrders(orderId int, warehouseId int, districtId int, oCarrierId int, deliveryDate time.Time) error
-	SumOLAmount(orderId int, warehouseId int, districtId int) (float64, error)
-	UpdateCustomer(customerId int, warehouseId int, districtId int, sumOlTotal float64) error
-	GetNextOrderId(warehouseId int, districtId int) (int, error)
-	GetStockCount(orderIdLt int, orderIdGt int, threshold int, warehouseId int, districtId int) (int64, error)
-	GetCustomerById(customerId int, warehouseId int, districtId int) (*models.Customer, error)
-	GetCustomerByName(name string, warehouseId int, districtId int) (*models.Customer, error)
-	GetLastOrder(customerId int, warehouseId int, districtId int) (*models.Order, error)
-	GetOrderLines(orderId int, warehouseId int, districtId int) (*[]models.OrderLine, error)
-	GetWarehouse(warehouseId int) (*models.Warehouse, error)
-	UpdateWarehouseBalance(warehouseId int, amount float64) error
-	GetDistrict(warehouseId int, districtId int) (*models.District, error)
-	UpdateDistrictBalance(warehouseId int, districtId int, amount float64) error
-	InsertHistory(warehouseId int, districtId int, date time.Time, amount float64, data string) error
-	UpdateCredit(customerId int, warehouseId int, districtId int, balance float64, data string) error
-	CreateOrder(orderId int, customerId int, warehouseId int, districtId int, oCarrierId int, oOlCnt int, allLocal int, orderEntryDate time.Time, orderLine []models.OrderLine) error
-	GetItems(itemIds []int) (*[]models.Item, error)
-	UpdateStock(stockId int, warehouseId int, quantity int, ytd int, ordercnt int, remotecnt int) error
-	GetStockInfo(districtId int, iIds []int, iWids []int, allLocal int) (*[]models.Stock, error)
+	InsertOne(ctx context.Context, ableName string, d interface{}) error
+	InsertBatch(ctx context.Context, tableName string, d []interface{}) error
+	IncrementDistrictOrderId(ctx context.Context, warehouseId int, districtId int) error
+	GetNewOrder(ctx context.Context, warehouseId int, districtId int) (*models.NewOrder, error)
+	DeleteNewOrder(ctx context.Context, orderId int, warehouseId int, districtId int) error
+	GetCustomer(ctx context.Context, customerId int, warehouseId int, districtId int) (*models.Customer, error)
+	GetCustomerIdOrder(ctx context.Context, orderId int, warehouseId int, districtId int) (int, error)
+	UpdateOrders(ctx context.Context, orderId int, warehouseId int, districtId int, oCarrierId int, deliveryDate time.Time) error
+	SumOLAmount(ctx context.Context, orderId int, warehouseId int, districtId int) (float64, error)
+	UpdateCustomer(ctx context.Context, customerId int, warehouseId int, districtId int, sumOlTotal float64) error
+	GetNextOrderId(ctx context.Context, warehouseId int, districtId int) (int, error)
+	GetStockCount(ctx context.Context, orderIdLt int, orderIdGt int, threshold int, warehouseId int, districtId int) (int64, error)
+	GetCustomerById(ctx context.Context, customerId int, warehouseId int, districtId int) (*models.Customer, error)
+	GetCustomerByName(ctx context.Context, name string, warehouseId int, districtId int) (*models.Customer, error)
+	GetLastOrder(ctx context.Context, customerId int, warehouseId int, districtId int) (*models.Order, error)
+	GetOrderLines(ctx context.Context, orderId int, warehouseId int, districtId int) (*[]models.OrderLine, error)
+	GetWarehouse(ctx context.Context, warehouseId int) (*models.Warehouse, error)
+	UpdateWarehouseBalance(ctx context.Context, warehouseId int, amount float64) error
+	GetDistrict(ctx context.Context, warehouseId int, districtId int) (*models.District, error)
+	UpdateDistrictBalance(ctx context.Context, warehouseId int, districtId int, amount float64) error
+	InsertHistory(ctx context.Context, warehouseId int, districtId int, date time.Time, amount float64, data string) error
+	UpdateCredit(ctx context.Context, customerId int, warehouseId int, districtId int, balance float64, data string) error
+	CreateOrder(ctx context.Context, orderId int, customerId int, warehouseId int, districtId int, oCarrierId int, oOlCnt int, allLocal int, orderEntryDate time.Time, orderLine []models.OrderLine) error
+	GetItems(ctx context.Context, itemIds []int) (*[]models.Item, error)
+	UpdateStock(ctx context.Context, stockId int, warehouseId int, quantity int, ytd int, ordercnt int, remotecnt int) error
+	GetStockInfo(ctx context.Context, districtId int, iIds []int, iWids []int, allLocal int) (*[]models.Stock, error)
 }
 
 func NewDatabase(driver, uri, dbname, username, password string, transactions bool, findandmodify bool) (Database, error) {
@@ -56,7 +57,7 @@ func NewDatabase(driver, uri, dbname, username, password string, transactions bo
 	case "postgresql":
 		d, err = postgresql.NewPostgreSQL(uri, dbname, transactions)
 	case "elasticSearch":
-		d, err = elasticsearch.NewElasticSearch(uri)
+		d, err = elasticsearch.NewElasticSearch(uri, findandmodify)
 	default:
 		panic("Unknown database driver")
 	}

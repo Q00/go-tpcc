@@ -3,24 +3,24 @@ package postgresql
 import (
 	"context"
 	"fmt"
-	"github.com/Percona-Lab/go-tpcc/tpcc/models"
-	"github.com/jackc/pgconn"
-	"github.com/jackc/pgx/v4"
 	"reflect"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Percona-Lab/go-tpcc/tpcc/models"
+	"github.com/jackc/pgconn"
+	"github.com/jackc/pgx/v4"
 )
 
 type PostgreSQL struct {
-	transactions bool
-	Client *pgx.Conn
-	fk bool
+	transactions       bool
+	Client             *pgx.Conn
+	fk                 bool
 	preparedStatements bool
-	tx pgx.Tx
-	isTx bool
+	tx                 pgx.Tx
+	isTx               bool
 }
-
 
 func NewPostgreSQL(uri string, dbname string, transactions bool) (*PostgreSQL, error) {
 	conn, err := pgx.Connect(context.Background(), uri)
@@ -34,9 +34,9 @@ func NewPostgreSQL(uri string, dbname string, transactions bool) (*PostgreSQL, e
 	}
 
 	return &PostgreSQL{
-		transactions: transactions,
-		Client: conn,
-		fk: true,
+		transactions:       transactions,
+		Client:             conn,
+		fk:                 true,
 		preparedStatements: false,
 	}, nil
 
@@ -62,18 +62,17 @@ func (db *PostgreSQL) RollbackTrx() error {
 
 func (db *PostgreSQL) transformQuery(query string, args ...interface{}) (string, []interface{}) {
 
-	for k,v := range args {
+	for k, v := range args {
 		switch v.(type) {
 		case time.Time:
 			args[k] = v.(time.Time).Format("2006-01-01 15:04:05")
 		}
 	}
 
-
-	if ! db.preparedStatements {
+	if !db.preparedStatements {
 		query = fmt.Sprintf(
 			strings.Replace(query, "?", "'%v'", -1),
-			args...
+			args...,
 		)
 
 		args = nil
@@ -82,9 +81,9 @@ func (db *PostgreSQL) transformQuery(query string, args ...interface{}) (string,
 	return query, args
 }
 
-func (db *PostgreSQL) query(query string, args ...interface{}) (pgx.Rows, error){
+func (db *PostgreSQL) query(query string, args ...interface{}) (pgx.Rows, error) {
 
-	query, args = db.transformQuery(query,args...)
+	query, args = db.transformQuery(query, args...)
 
 	if db.transactions && db.isTx {
 		return db.tx.Query(context.Background(), query, args...)
@@ -95,7 +94,7 @@ func (db *PostgreSQL) query(query string, args ...interface{}) (pgx.Rows, error)
 
 func (db *PostgreSQL) queryRow(query string, args ...interface{}) pgx.Row {
 
-	query, args = db.transformQuery(query,args...)
+	query, args = db.transformQuery(query, args...)
 
 	if db.transactions && db.isTx {
 		return db.tx.QueryRow(context.Background(), query, args...)
@@ -104,9 +103,9 @@ func (db *PostgreSQL) queryRow(query string, args ...interface{}) pgx.Row {
 	return db.Client.QueryRow(context.Background(), query, args...)
 }
 
-func (db *PostgreSQL) exec(query string, args ...interface{}) (pgconn.CommandTag, error){
+func (db *PostgreSQL) exec(query string, args ...interface{}) (pgconn.CommandTag, error) {
 
-	query, args = db.transformQuery(query,args...)
+	query, args = db.transformQuery(query, args...)
 
 	if db.transactions && db.isTx {
 		return db.tx.Exec(context.Background(), query, args...)
@@ -115,7 +114,7 @@ func (db *PostgreSQL) exec(query string, args ...interface{}) (pgconn.CommandTag
 	return db.Client.Exec(context.Background(), query, args...)
 }
 
-func (db *PostgreSQL) InsertOne(tableName string, d interface{}) error {
+func (db *PostgreSQL) InsertOne(ctx context.Context, tableName string, d interface{}) error {
 	v := reflect.ValueOf(d)
 	t := v.Type()
 	var fields []string
@@ -157,7 +156,7 @@ func (db *PostgreSQL) InsertOne(tableName string, d interface{}) error {
 		}
 	}
 
-	_,err := db.Client.Exec(
+	_, err := db.Client.Exec(
 		context.Background(),
 		fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", tableName, f, strings.Join(values_, ",")),
 	)
@@ -168,9 +167,9 @@ func (db *PostgreSQL) InsertOne(tableName string, d interface{}) error {
 	return err
 }
 
-func (db *PostgreSQL) InsertBatch(tableName string, d []interface{}) error {
+func (db *PostgreSQL) InsertBatch(ctx context.Context, tableName string, d []interface{}) error {
 	for _, item := range d {
-		err := db.InsertOne(tableName, item)
+		err := db.InsertOne(ctx, tableName, item)
 		if err != nil {
 			return err
 		}
@@ -179,7 +178,7 @@ func (db *PostgreSQL) InsertBatch(tableName string, d []interface{}) error {
 	return nil
 }
 
-func (db *PostgreSQL) IncrementDistrictOrderId(warehouseId int, districtId int) error {
+func (db *PostgreSQL) IncrementDistrictOrderId(ctx context.Context, warehouseId int, districtId int) error {
 	query := "UPDATE DISTRICT SET D_NEXT_O_ID = D_NEXT_O_ID+? WHERE D_ID = ? AND D_W_ID = ?"
 
 	r, err := db.exec(query, 1, districtId, warehouseId)
@@ -195,7 +194,7 @@ func (db *PostgreSQL) IncrementDistrictOrderId(warehouseId int, districtId int) 
 	return nil
 }
 
-func (db *PostgreSQL) GetNewOrder(warehouseId int, districtId int) (*models.NewOrder, error) {
+func (db *PostgreSQL) GetNewOrder(ctx context.Context, warehouseId int, districtId int) (*models.NewOrder, error) {
 
 	var query string
 	if db.transactions {
@@ -215,7 +214,7 @@ func (db *PostgreSQL) GetNewOrder(warehouseId int, districtId int) (*models.NewO
 	return &no, nil
 }
 
-func (db *PostgreSQL) DeleteNewOrder(orderId int, warehouseId int, districtId int) error {
+func (db *PostgreSQL) DeleteNewOrder(ctx context.Context, orderId int, warehouseId int, districtId int) error {
 
 	query := "DELETE FROM NEW_ORDER WHERE NO_O_ID = ? AND NO_D_ID = ? AND NO_W_ID = ?"
 	r, err := db.exec(query, orderId, districtId, warehouseId)
@@ -231,7 +230,7 @@ func (db *PostgreSQL) DeleteNewOrder(orderId int, warehouseId int, districtId in
 	return nil
 }
 
-func (db *PostgreSQL) GetCustomer(customerId int, warehouseId int, districtId int) (*models.Customer, error) {
+func (db *PostgreSQL) GetCustomer(ctx context.Context, customerId int, warehouseId int, districtId int) (*models.Customer, error) {
 
 	query := "SELECT C_ID, C_D_ID, C_W_ID, C_FIRST, C_MIDDLE, C_LAST, C_STREET_1, C_STREET_2, C_CITY, C_STATE, C_ZIP, " +
 		"C_PHONE, C_SINCE, C_CREDIT, C_CREDIT_LIM :: float, C_DISCOUNT, C_BALANCE, C_YTD_PAYMENT, C_PAYMENT_CNT, C_DELIVERY_CNT, C_DATA " +
@@ -272,7 +271,7 @@ func (db *PostgreSQL) GetCustomer(customerId int, warehouseId int, districtId in
 	return &customer, nil
 }
 
-func (db *PostgreSQL) GetCustomerIdOrder(orderId int, warehouseId int, districtId int) (int, error) {
+func (db *PostgreSQL) GetCustomerIdOrder(ctx context.Context, orderId int, warehouseId int, districtId int) (int, error) {
 	query := "SELECT O_C_ID FROM ORDERS WHERE O_ID = ? AND O_D_ID = ? AND O_W_ID = ?"
 
 	r := db.queryRow(query, orderId, districtId, warehouseId)
@@ -288,7 +287,7 @@ func (db *PostgreSQL) GetCustomerIdOrder(orderId int, warehouseId int, districtI
 	return cId, nil
 }
 
-func (db *PostgreSQL) UpdateOrders(orderId int, warehouseId int, districtId int, oCarrierId int, deliveryDate time.Time) error {
+func (db *PostgreSQL) UpdateOrders(ctx context.Context, orderId int, warehouseId int, districtId int, oCarrierId int, deliveryDate time.Time) error {
 	query := "UPDATE ORDERS SET O_CARRIER_ID = ? WHERE O_ID = ? AND O_D_ID = ? AND O_W_ID = ?"
 	r, err := db.exec(query, oCarrierId, orderId, districtId, warehouseId)
 	if err != nil {
@@ -312,7 +311,7 @@ func (db *PostgreSQL) UpdateOrders(orderId int, warehouseId int, districtId int,
 	return nil
 }
 
-func (db *PostgreSQL) SumOLAmount(orderId int, warehouseId int, districtId int) (float64, error) {
+func (db *PostgreSQL) SumOLAmount(ctx context.Context, orderId int, warehouseId int, districtId int) (float64, error) {
 	query := "SELECT SUM(ol_amount) FROM ORDER_LINE WHERE OL_O_ID = ? AND OL_D_ID = ? AND OL_W_ID = ?"
 	row := db.queryRow(query, orderId, districtId, warehouseId)
 	var sum float64
@@ -324,7 +323,7 @@ func (db *PostgreSQL) SumOLAmount(orderId int, warehouseId int, districtId int) 
 	return sum, nil
 }
 
-func (db *PostgreSQL) UpdateCustomer(customerId int, warehouseId int, districtId int, sumOlTotal float64) error {
+func (db *PostgreSQL) UpdateCustomer(ctx context.Context, customerId int, warehouseId int, districtId int, sumOlTotal float64) error {
 	query := "UPDATE CUSTOMER SET C_BALANCE = C_BALANCE + ? WHERE C_ID = ? AND C_D_ID = ? AND C_W_ID = ?"
 
 	res, err := db.exec(query, sumOlTotal, customerId, districtId, warehouseId)
@@ -339,7 +338,7 @@ func (db *PostgreSQL) UpdateCustomer(customerId int, warehouseId int, districtId
 	return nil
 }
 
-func (db *PostgreSQL) GetNextOrderId(warehouseId int, districtId int) (int, error) {
+func (db *PostgreSQL) GetNextOrderId(ctx context.Context, warehouseId int, districtId int) (int, error) {
 	query := "SELECT D_NEXT_O_ID FROM DISTRICT WHERE D_ID = ? AND D_W_ID = ?"
 
 	row := db.queryRow(query, districtId, warehouseId)
@@ -352,14 +351,13 @@ func (db *PostgreSQL) GetNextOrderId(warehouseId int, districtId int) (int, erro
 	return dn, nil
 }
 
-func (db *PostgreSQL) GetStockCount(orderIdLt int, orderIdGt int, threshold int, warehouseId int, districtId int) (int64, error) {
+func (db *PostgreSQL) GetStockCount(ctx context.Context, orderIdLt int, orderIdGt int, threshold int, warehouseId int, districtId int) (int64, error) {
 	query := "SELECT COUNT(DISTINCT(OL_I_ID)) FROM " +
 		"ORDER_LINE, STOCK " +
 		"WHERE " +
 		"OL_W_ID = ? AND OL_D_ID = ? " +
 		"AND OL_O_ID < ? AND OL_O_ID >= ? " +
 		"AND S_W_ID = ? AND S_I_ID = OL_I_ID AND S_QUANTITY < ?"
-
 
 	row := db.queryRow(query, warehouseId, districtId, orderIdLt, orderIdGt, warehouseId, threshold)
 	var count int64
@@ -371,7 +369,7 @@ func (db *PostgreSQL) GetStockCount(orderIdLt int, orderIdGt int, threshold int,
 	return count, nil
 }
 
-func (db *PostgreSQL) GetCustomerById(customerId int, warehouseId int, districtId int) (*models.Customer, error) {
+func (db *PostgreSQL) GetCustomerById(ctx context.Context, customerId int, warehouseId int, districtId int) (*models.Customer, error) {
 	var c models.Customer
 
 	query := "SELECT C_ID, C_FIRST, C_MIDDLE, C_LAST, C_BALANCE FROM CUSTOMER WHERE C_ID = ? AND C_W_ID = ? and C_D_ID = ?"
@@ -382,13 +380,13 @@ func (db *PostgreSQL) GetCustomerById(customerId int, warehouseId int, districtI
 		return nil, err
 	}
 
-	return &c, nil;
+	return &c, nil
 }
 
-func (db *PostgreSQL) GetCustomerByName(name string, warehouseId int, districtId int) (*models.Customer, error) {
+func (db *PostgreSQL) GetCustomerByName(ctx context.Context, name string, warehouseId int, districtId int) (*models.Customer, error) {
 	query := "SELECT C_ID, C_FIRST, C_MIDDLE, C_LAST, C_BALANCE FROM CUSTOMER WHERE C_W_ID = ? AND C_D_ID = ? AND C_LAST = ?"
 
-	rows,err := db.query(query, warehouseId, districtId, name)
+	rows, err := db.query(query, warehouseId, districtId, name)
 	defer rows.Close()
 	if err != nil {
 		return nil, err
@@ -410,10 +408,10 @@ func (db *PostgreSQL) GetCustomerByName(name string, warehouseId int, districtId
 		return nil, fmt.Errorf("no customers found with given name: %s", name)
 	}
 
-	return &customers[(len(customers)-1)/2],nil
+	return &customers[(len(customers)-1)/2], nil
 }
 
-func (db *PostgreSQL) GetLastOrder(customerId int, warehouseId int, districtId int) (*models.Order, error) {
+func (db *PostgreSQL) GetLastOrder(ctx context.Context, customerId int, warehouseId int, districtId int) (*models.Order, error) {
 	query := "SELECT O_ID, O_CARRIER_ID, O_ENTRY_D FROM ORDERS WHERE O_W_ID = ? AND O_D_ID = ? AND O_C_ID = ?"
 
 	row := db.queryRow(query, warehouseId, districtId, customerId)
@@ -428,7 +426,7 @@ func (db *PostgreSQL) GetLastOrder(customerId int, warehouseId int, districtId i
 	return &m, nil
 }
 
-func (db *PostgreSQL) GetOrderLines(orderId int, warehouseId int, districtId int) (*[]models.OrderLine, error) {
+func (db *PostgreSQL) GetOrderLines(ctx context.Context, orderId int, warehouseId int, districtId int) (*[]models.OrderLine, error) {
 	query := "SELECT OL_O_ID, OL_D_ID, OL_W_ID, OL_NUMBER, OL_I_ID, OL_SUPPLY_W_ID, OL_DELIVERY_D, OL_QUANTITY, OL_AMOUNT, OL_DIST_INFO FROM ORDER_LINE " +
 		"WHERE OL_O_ID = ? AND OL_W_ID = ? AND OL_D_ID = ?"
 
@@ -437,7 +435,6 @@ func (db *PostgreSQL) GetOrderLines(orderId int, warehouseId int, districtId int
 	if err != nil {
 		return nil, err
 	}
-
 
 	var ol []models.OrderLine
 
@@ -465,14 +462,14 @@ func (db *PostgreSQL) GetOrderLines(orderId int, warehouseId int, districtId int
 	return &ol, nil
 }
 
-func (db *PostgreSQL) GetWarehouse(warehouseId int) (*models.Warehouse, error) {
+func (db *PostgreSQL) GetWarehouse(ctx context.Context, warehouseId int) (*models.Warehouse, error) {
 	query := "SELECT W_ID, W_NAME, W_STREET_1, W_STREET_2, W_CITY, W_STATE, W_ZIP, W_TAX, W_YTD FROM WAREHOUSE WHERE W_ID = ?"
 
 	row := db.queryRow(query, warehouseId)
 
 	var w models.Warehouse
 
-	err := row.Scan(&w.W_ID, &w.W_NAME, &w.W_STREET_1, &w.W_STREET_2, &w.W_CITY, &w.W_STATE, &w.W_ZIP, &w.W_TAX, &w.W_YTD, )
+	err := row.Scan(&w.W_ID, &w.W_NAME, &w.W_STREET_1, &w.W_STREET_2, &w.W_CITY, &w.W_STATE, &w.W_ZIP, &w.W_TAX, &w.W_YTD)
 	if err != nil {
 		return nil, err
 	}
@@ -480,7 +477,7 @@ func (db *PostgreSQL) GetWarehouse(warehouseId int) (*models.Warehouse, error) {
 	return &w, nil
 }
 
-func (db *PostgreSQL) UpdateWarehouseBalance(warehouseId int, amount float64) error {
+func (db *PostgreSQL) UpdateWarehouseBalance(ctx context.Context, warehouseId int, amount float64) error {
 	query := "UPDATE WAREHOUSE SET W_YTD = W_YTD + ? WHERE W_ID = ?"
 
 	r, err := db.exec(query, amount, warehouseId)
@@ -492,11 +489,10 @@ func (db *PostgreSQL) UpdateWarehouseBalance(warehouseId int, amount float64) er
 		return fmt.Errorf("unable to match warehouse")
 	}
 
-
 	return nil
 }
 
-func (db *PostgreSQL) GetDistrict(warehouseId int, districtId int) (*models.District, error) {
+func (db *PostgreSQL) GetDistrict(ctx context.Context, warehouseId int, districtId int) (*models.District, error) {
 	var query string
 	if db.transactions {
 		query = "SELECT D_ID, D_W_ID, D_NAME, D_STREET_1, D_STREET_2, D_CITY, D_STATE, D_ZIP, D_TAX, D_YTD, D_NEXT_O_ID FROM DISTRICT WHERE D_W_ID = ? and D_ID = ? FOR UPDATE"
@@ -528,7 +524,7 @@ func (db *PostgreSQL) GetDistrict(warehouseId int, districtId int) (*models.Dist
 	return &d, nil
 }
 
-func (db *PostgreSQL) UpdateDistrictBalance(warehouseId int, districtId int, amount float64) error {
+func (db *PostgreSQL) UpdateDistrictBalance(ctx context.Context, warehouseId int, districtId int, amount float64) error {
 	query := "UPDATE DISTRICT SET D_YTD = D_YTD + ? WHERE D_W_ID = ? AND D_ID = ?"
 
 	r, err := db.exec(query, amount, warehouseId, districtId)
@@ -543,10 +539,10 @@ func (db *PostgreSQL) UpdateDistrictBalance(warehouseId int, districtId int, amo
 	return nil
 }
 
-func (db *PostgreSQL) InsertHistory(warehouseId int, districtId int, date time.Time, amount float64, data string) error {
+func (db *PostgreSQL) InsertHistory(ctx context.Context, warehouseId int, districtId int, date time.Time, amount float64, data string) error {
 	query := "INSERT INTO HISTORY (H_C_ID, H_D_ID, H_W_ID, H_C_W_ID, H_C_D_ID, H_DATE, H_AMOUNT, H_DATA) VALUES (?,?,?,?,?,?,?,?)"
 
-	_,err := db.exec(query, 1, districtId, warehouseId, warehouseId, districtId, date, amount, data)
+	_, err := db.exec(query, 1, districtId, warehouseId, warehouseId, districtId, date, amount, data)
 	if err != nil {
 		fmt.Println(db.transformQuery(query, 1, districtId, warehouseId, warehouseId, districtId, date, amount, data))
 		panic("aa")
@@ -556,15 +552,15 @@ func (db *PostgreSQL) InsertHistory(warehouseId int, districtId int, date time.T
 	return nil
 }
 
-func (db *PostgreSQL) UpdateCredit(customerId int, warehouseId int, districtId int, balance float64, data string) error {
+func (db *PostgreSQL) UpdateCredit(ctx context.Context, customerId int, warehouseId int, districtId int, balance float64, data string) error {
 	var err error
 	var res pgconn.CommandTag
 
 	if len(data) > 0 {
-		res, err = db.exec("UPDATE CUSTOMER SET " +
-			"C_BALANCE = C_BALANCE + ?, C_YTD_PAYMENT = C_YTD_PAYMENT + ?, C_PAYMENT_CNT = C_PAYMENT_CNT + ?, C_DATA = ? " +
+		res, err = db.exec("UPDATE CUSTOMER SET "+
+			"C_BALANCE = C_BALANCE + ?, C_YTD_PAYMENT = C_YTD_PAYMENT + ?, C_PAYMENT_CNT = C_PAYMENT_CNT + ?, C_DATA = ? "+
 			"WHERE C_ID = ? AND C_W_ID = ? AND C_D_ID = ?",
-			-1* balance,
+			-1*balance,
 			balance,
 			1,
 			data,
@@ -573,10 +569,10 @@ func (db *PostgreSQL) UpdateCredit(customerId int, warehouseId int, districtId i
 			districtId,
 		)
 	} else {
-		res, err = db.exec("UPDATE CUSTOMER SET " +
-			"C_BALANCE = C_BALANCE + ?, C_YTD_PAYMENT = C_YTD_PAYMENT + ?, C_PAYMENT_CNT = C_PAYMENT_CNT + ? " +
+		res, err = db.exec("UPDATE CUSTOMER SET "+
+			"C_BALANCE = C_BALANCE + ?, C_YTD_PAYMENT = C_YTD_PAYMENT + ?, C_PAYMENT_CNT = C_PAYMENT_CNT + ? "+
 			"WHERE C_ID = ? AND C_W_ID = ? AND C_D_ID = ?",
-			-1* balance,
+			-1*balance,
 			balance,
 			1,
 			customerId,
@@ -596,7 +592,7 @@ func (db *PostgreSQL) UpdateCredit(customerId int, warehouseId int, districtId i
 	return nil
 }
 
-func (db *PostgreSQL) CreateOrder(
+func (db *PostgreSQL) CreateOrder(ctx context.Context,
 	orderId, customerId, warehouseId, districtId, oCarrierId, oOlCnt, allLocal int,
 	orderEntryDate time.Time,
 	orderLine []models.OrderLine,
@@ -611,7 +607,7 @@ func (db *PostgreSQL) CreateOrder(
 	}
 
 	query = "INSERT INTO NEW_ORDER (NO_O_ID, NO_D_ID, NO_W_ID) VALUES (?, ?, ?)"
-	_,err = db.exec(query, orderId, districtId, warehouseId)
+	_, err = db.exec(query, orderId, districtId, warehouseId)
 	if err != nil {
 		return err
 	}
@@ -630,10 +626,10 @@ func (db *PostgreSQL) CreateOrder(
 	return nil
 }
 
-func (db *PostgreSQL) GetItems(itemIds []int) (*[]models.Item, error) {
+func (db *PostgreSQL) GetItems(ctx context.Context, itemIds []int) (*[]models.Item, error) {
 	var itemIds_ []string
 
-	for _,item := range itemIds {
+	for _, item := range itemIds {
 		itemIds_ = append(itemIds_, strconv.Itoa(item))
 	}
 
@@ -660,7 +656,7 @@ func (db *PostgreSQL) GetItems(itemIds []int) (*[]models.Item, error) {
 	return &items, nil
 }
 
-func (db *PostgreSQL) UpdateStock(stockId int, warehouseId int, quantity int, ytd int, ordercnt int, remotecnt int) error {
+func (db *PostgreSQL) UpdateStock(ctx context.Context, stockId int, warehouseId int, quantity int, ytd int, ordercnt int, remotecnt int) error {
 
 	query := "UPDATE STOCK SET S_QUANTITY = ?, S_YTD = ?, S_ORDER_CNT = ?, S_REMOTE_CNT = ? WHERE S_I_ID = ? AND S_W_ID = ?"
 
@@ -676,7 +672,7 @@ func (db *PostgreSQL) UpdateStock(stockId int, warehouseId int, quantity int, yt
 	return nil
 }
 
-func (db *PostgreSQL) GetStockInfo(
+func (db *PostgreSQL) GetStockInfo(ctx context.Context,
 	districtId int,
 	iIds []int,
 	iWids []int,
@@ -696,14 +692,14 @@ func (db *PostgreSQL) GetStockInfo(
 	} else {
 		var p []string
 
-		for i,item := range iIds {
+		for i, item := range iIds {
 			p = append(p, fmt.Sprintf("(S_W_ID = %d AND S_I_ID = %d)", iWids[i], item))
 		}
 
 		buf = strings.Join(p, " OR ")
 	}
 
-	query := fmt.Sprintf("SELECT S_I_ID, S_W_ID, S_QUANTITY, S_DATA, S_YTD, S_ORDER_CNT, S_REMOTE_CNT, S_DIST_%02d FROM STOCK " +
+	query := fmt.Sprintf("SELECT S_I_ID, S_W_ID, S_QUANTITY, S_DATA, S_YTD, S_ORDER_CNT, S_REMOTE_CNT, S_DIST_%02d FROM STOCK "+
 		"WHERE %s", districtId, buf)
 
 	rows, err := db.query(query)
@@ -752,4 +748,3 @@ func (db *PostgreSQL) GetStockInfo(
 	}
 	return &stocks, nil
 }
-

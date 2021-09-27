@@ -1,12 +1,13 @@
 package tpcc
 
 import (
-	"github.com/Percona-Lab/go-tpcc/tpcc/models"
+	"context"
 	"math/rand"
-	"github.com/Percona-Lab/go-tpcc/helpers"
 	"time"
-)
 
+	"github.com/Percona-Lab/go-tpcc/helpers"
+	"github.com/Percona-Lab/go-tpcc/tpcc/models"
+)
 
 func (w *Worker) GenerateWarehouse(id int) models.Warehouse {
 
@@ -24,17 +25,17 @@ func (w *Worker) GenerateWarehouse(id int) models.Warehouse {
 	}
 }
 
-func (w *Worker) LoadWarehouse(id int) error {
+func (w *Worker) LoadWarehouse(ctx context.Context, id int) error {
 	var err error
 	warehouse := w.GenerateWarehouse(id)
-	err = w.ex.Save(TABLENAME_WAREHOUSE, warehouse)
+	err = w.ex.Save(ctx, TABLENAME_WAREHOUSE, warehouse)
 	if err != nil {
 		return err
 	}
 
 	for i := 1; i <= w.sc.DistrictsPerWarehouse+1; i++ {
 		district := w.generateDistrict(i, id, w.sc.CustomersPerDistrict+1)
-		w.ex.Save(TABLENAME_DISTRICT, district)
+		w.ex.Save(ctx, TABLENAME_DISTRICT, district)
 		badCredits := helpers.SelectUniqueIds(w.sc.CustomersPerDistrict/10, 1, w.sc.CustomersPerDistrict)
 
 		var customersId []int
@@ -44,7 +45,6 @@ func (w *Worker) LoadWarehouse(id int) error {
 
 			//@TODO@
 
-
 			for _, item := range badCredits {
 				if item == i {
 					isBadCredit = true
@@ -53,22 +53,22 @@ func (w *Worker) LoadWarehouse(id int) error {
 			}
 
 			customersId = append(customersId, c)
-			err = w.ex.SaveBatch(TABLENAME_CUSTOMER, w.generateCustomer(c, id, i, isBadCredit))
+			err = w.ex.SaveBatch(ctx, TABLENAME_CUSTOMER, w.generateCustomer(c, id, i, isBadCredit))
 			if err != nil {
 				return err
 			}
 
-			err = w.ex.SaveBatch(TABLENAME_HISTORY, w.generateHistory(id, i, c))
+			err = w.ex.SaveBatch(ctx, TABLENAME_HISTORY, w.generateHistory(id, i, c))
 			if err != nil {
 				return err
 			}
 		}
 
-		err = w.ex.Flush(TABLENAME_CUSTOMER)
+		err = w.ex.Flush(ctx, TABLENAME_CUSTOMER)
 		if err != nil {
 			return err
 		}
-		err = w.ex.Flush(TABLENAME_HISTORY)
+		err = w.ex.Flush(ctx, TABLENAME_HISTORY)
 		if err != nil {
 			return err
 		}
@@ -79,9 +79,9 @@ func (w *Worker) LoadWarehouse(id int) error {
 			orderCount := helpers.RandInt(MIN_OL_CNT, MAX_OL_CNT)
 
 			isNewOrder := false
-			if w.sc.CustomersPerDistrict - w.sc.NewOrdersPerDistrict < c {
+			if w.sc.CustomersPerDistrict-w.sc.NewOrdersPerDistrict < c {
 				isNewOrder = true
-				err = w.ex.SaveBatch(TABLENAME_NEW_ORDER, w.generateNewOrder(id, i, c))
+				err = w.ex.SaveBatch(ctx, TABLENAME_NEW_ORDER, w.generateNewOrder(id, i, c))
 				if err != nil {
 					return err
 				}
@@ -96,36 +96,34 @@ func (w *Worker) LoadWarehouse(id int) error {
 					//orderLines = append(orderLines, )
 					order.ORDER_LINE = append(order.ORDER_LINE, w.generateOrderLine(id, i, c, o, w.sc.Items, isNewOrder))
 				}
-				err = w.ex.SaveBatch(TABLENAME_ORDERS, order)
+				err = w.ex.SaveBatch(ctx, TABLENAME_ORDERS, order)
 				if err != nil {
 					return err
 				}
 			} else {
-				err = w.ex.SaveBatch(TABLENAME_ORDERS, order)
+				err = w.ex.SaveBatch(ctx, TABLENAME_ORDERS, order)
 				if err != nil {
 					return err
 				}
 				for o := 0; o < orderCount; o++ {
-					err = w.ex.SaveBatch(TABLENAME_ORDER_LINE, w.generateOrderLine(id, i, c, o, w.sc.Items, isNewOrder))
+					err = w.ex.SaveBatch(ctx, TABLENAME_ORDER_LINE, w.generateOrderLine(id, i, c, o, w.sc.Items, isNewOrder))
 					if err != nil {
 						return err
 					}
 				}
-				err = w.ex.Flush(TABLENAME_ORDER_LINE)
+				err = w.ex.Flush(ctx, TABLENAME_ORDER_LINE)
 				if err != nil {
 					return err
 				}
 			}
 
-
-
 		}
 
-		err = w.ex.Flush(TABLENAME_ORDERS)
+		err = w.ex.Flush(ctx, TABLENAME_ORDERS)
 		if err != nil {
 			return err
 		}
-		err = w.ex.Flush(TABLENAME_NEW_ORDER)
+		err = w.ex.Flush(ctx, TABLENAME_NEW_ORDER)
 		if err != nil {
 			return err
 		}
@@ -142,13 +140,13 @@ func (w *Worker) LoadWarehouse(id int) error {
 			}
 		}
 
-		err = w.ex.SaveBatch(TABLENAME_STOCK, w.generateStock(id, i, isOriginal))
+		err = w.ex.SaveBatch(ctx, TABLENAME_STOCK, w.generateStock(id, i, isOriginal))
 		if err != nil {
 			return err
 		}
 	}
 
-	err = w.ex.Flush(TABLENAME_STOCK)
+	err = w.ex.Flush(ctx, TABLENAME_STOCK)
 	if err != nil {
 		return err
 	}

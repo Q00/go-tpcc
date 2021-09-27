@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -40,11 +41,11 @@ func (e *Executor) ChangeRetries(r int) {
 // @TODO@
 // Error handling
 
-func (e *Executor) SaveBatch(collectionName string, d interface{}) error {
+func (e *Executor) SaveBatch(ctx context.Context, collectionName string, d interface{}) error {
 	e.data[collectionName] = append(e.data[collectionName], d)
 
 	if len(e.data[collectionName])%e.batchSize == 0 {
-		err := e.db.InsertBatch(collectionName, e.data[collectionName])
+		err := e.db.InsertBatch(ctx, collectionName, e.data[collectionName])
 		if err != nil {
 			return err
 		}
@@ -54,8 +55,8 @@ func (e *Executor) SaveBatch(collectionName string, d interface{}) error {
 	return nil
 }
 
-func (e *Executor) Flush(collectionName string) error {
-	err := e.db.InsertBatch(collectionName, e.data[collectionName])
+func (e *Executor) Flush(ctx context.Context, collectionName string) error {
+	err := e.db.InsertBatch(ctx, collectionName, e.data[collectionName])
 	if err != nil {
 		return err
 	}
@@ -63,8 +64,8 @@ func (e *Executor) Flush(collectionName string) error {
 	return nil
 }
 
-func (e *Executor) Save(collectionName string, d interface{}) error {
-	err := e.db.InsertOne(collectionName, d)
+func (e *Executor) Save(ctx context.Context, collectionName string, d interface{}) error {
+	err := e.db.InsertOne(ctx, collectionName, d)
 	if err != nil {
 		return err
 	}
@@ -113,15 +114,15 @@ func (e *Executor) DoTrxRetries(fn func() error) error {
 	return err
 }
 
-func (e *Executor) DoStockLevelTrx(warehouseId int, districtId int, threshold int) error {
+func (e *Executor) DoStockLevelTrx(ctx context.Context, warehouseId int, districtId int, threshold int) error {
 	// Do Stock Level never requires a transactions
 
-	noid, err := e.db.GetNextOrderId(warehouseId, districtId)
+	noid, err := e.db.GetNextOrderId(ctx, warehouseId, districtId)
 	if err != nil {
 		return err
 	}
 
-	_, err = e.db.GetStockCount(noid, noid-20, threshold, warehouseId, districtId)
+	_, err = e.db.GetStockCount(ctx, noid, noid-20, threshold, warehouseId, districtId)
 
 	if err != nil {
 		return err
@@ -130,10 +131,10 @@ func (e *Executor) DoStockLevelTrx(warehouseId int, districtId int, threshold in
 	return nil
 }
 
-func (e *Executor) DoDeliveryTrx(wId int, oCarrierId int, olDeliveryD time.Time, dId int) error {
+func (e *Executor) DoDeliveryTrx(ctx context.Context, wId int, oCarrierId int, olDeliveryD time.Time, dId int) error {
 	return e.DoTrxRetries(func() error {
 		for i := 1; i <= dId; i++ {
-			err := e.DoDelivery(wId, oCarrierId, olDeliveryD, i)
+			err := e.DoDelivery(ctx, wId, oCarrierId, olDeliveryD, i)
 			if err != nil {
 				panic(err)
 			}
@@ -146,40 +147,40 @@ func (e *Executor) DoDeliveryTrx(wId int, oCarrierId int, olDeliveryD time.Time,
 
 //todo the order of arguments here is weird
 // also the dId passed from the worker is probably utterly wrong
-func (e *Executor) DoDelivery(wId int, oCarrierId int, olDeliveryD time.Time, dId int) error {
+func (e *Executor) DoDelivery(ctx context.Context, wId int, oCarrierId int, olDeliveryD time.Time, dId int) error {
 
-	no, err := e.db.GetNewOrder(wId, dId)
+	no, err := e.db.GetNewOrder(ctx, wId, dId)
 	if err != nil {
 		fmt.Println("WID=", wId, " DID=", dId)
 		return err
 	}
 
-	cid, err := e.db.GetCustomerIdOrder(no.NO_O_ID, wId, dId)
+	cid, err := e.db.GetCustomerIdOrder(ctx, no.NO_O_ID, wId, dId)
 	if err != nil {
 		return err
 	}
 
-	olAmount, err := e.db.SumOLAmount(no.NO_O_ID, wId, dId)
+	olAmount, err := e.db.SumOLAmount(ctx, no.NO_O_ID, wId, dId)
 	if err != nil {
 		return err
 	}
 
-	err = e.db.DeleteNewOrder(no.NO_O_ID, wId, dId)
+	err = e.db.DeleteNewOrder(ctx, no.NO_O_ID, wId, dId)
 	if err != nil {
 		return err
 	}
 
-	_, err = e.db.GetCustomerIdOrder(no.NO_O_ID, wId, dId)
+	_, err = e.db.GetCustomerIdOrder(ctx, no.NO_O_ID, wId, dId)
 	if err != nil {
 		return err
 	}
 
-	err = e.db.UpdateOrders(no.NO_O_ID, wId, dId, oCarrierId, olDeliveryD)
+	err = e.db.UpdateOrders(ctx, no.NO_O_ID, wId, dId, oCarrierId, olDeliveryD)
 	if err != nil {
 		return err
 	}
 
-	err = e.db.UpdateCustomer(cid, wId, dId, olAmount)
+	err = e.db.UpdateCustomer(ctx, cid, wId, dId, olAmount)
 	if err != nil {
 		return err
 	}
@@ -187,21 +188,21 @@ func (e *Executor) DoDelivery(wId int, oCarrierId int, olDeliveryD time.Time, dI
 	return nil
 }
 
-func (e *Executor) DoOrderStatusTrx(warehouseId, districtId, cId int, cLast string) error {
+func (e *Executor) DoOrderStatusTrx(ctx context.Context, warehouseId, districtId, cId int, cLast string) error {
 	return e.DoTrxRetries(func() error {
-		return e.DoOrderStatus(warehouseId, districtId, cId, cLast)
+		return e.DoOrderStatus(ctx, warehouseId, districtId, cId, cLast)
 	})
 }
 
-func (e *Executor) DoOrderStatus(warehouseId, districtId, cId int, cLast string) error {
+func (e *Executor) DoOrderStatus(ctx context.Context, warehouseId, districtId, cId int, cLast string) error {
 
 	var err error
 
 	if cId > 0 {
-		_, err = e.db.GetCustomerById(cId, warehouseId, districtId)
+		_, err = e.db.GetCustomerById(ctx, cId, warehouseId, districtId)
 	} else {
 		var customer *models.Customer
-		customer, err = e.db.GetCustomerByName(cLast, warehouseId, districtId)
+		customer, err = e.db.GetCustomerByName(ctx, cLast, warehouseId, districtId)
 		if err != nil {
 			return err
 		}
@@ -212,13 +213,13 @@ func (e *Executor) DoOrderStatus(warehouseId, districtId, cId int, cLast string)
 		return err
 	}
 
-	order, err := e.db.GetLastOrder(cId, warehouseId, districtId)
+	order, err := e.db.GetLastOrder(ctx, cId, warehouseId, districtId)
 
 	if err != nil {
 		return err
 	}
 
-	_, err = e.db.GetOrderLines(order.O_ID, warehouseId, districtId)
+	_, err = e.db.GetOrderLines(ctx, order.O_ID, warehouseId, districtId)
 
 	if err != nil {
 		return err
@@ -227,7 +228,7 @@ func (e *Executor) DoOrderStatus(warehouseId, districtId, cId int, cLast string)
 	return nil
 }
 
-func (e *Executor) DoPaymentTrx(warehouseId, districtId int,
+func (e *Executor) DoPaymentTrx(ctx context.Context, warehouseId, districtId int,
 	amount float64,
 	cWId, cDId, cId int,
 	cLast string,
@@ -235,7 +236,7 @@ func (e *Executor) DoPaymentTrx(warehouseId, districtId int,
 	badCredit string,
 	cdatalen int) error {
 	return e.DoTrxRetries(func() error {
-		return e.DoPayment(warehouseId, districtId,
+		return e.DoPayment(ctx, warehouseId, districtId,
 			amount,
 			cWId, cDId, cId,
 			cLast,
@@ -246,6 +247,7 @@ func (e *Executor) DoPaymentTrx(warehouseId, districtId int,
 }
 
 func (e *Executor) DoPayment(
+	ctx context.Context,
 	warehouseId, districtId int,
 	amount float64,
 	cWId, cDId, cId int,
@@ -254,38 +256,38 @@ func (e *Executor) DoPayment(
 	badCredit string,
 	cdatalen int,
 ) error {
-	warehouse, err := e.db.GetWarehouse(warehouseId)
+	warehouse, err := e.db.GetWarehouse(ctx, warehouseId)
 
 	if err != nil {
 		return err
 	}
 
-	err = e.db.UpdateWarehouseBalance(warehouseId, amount)
+	err = e.db.UpdateWarehouseBalance(ctx, warehouseId, amount)
 
 	if err != nil {
 		return err
 	}
 
-	district, err := e.db.GetDistrict(warehouseId, districtId)
+	district, err := e.db.GetDistrict(ctx, warehouseId, districtId)
 
 	if err != nil {
 		fmt.Println(warehouseId, districtId)
 		return err
 	}
 
-	err = e.db.UpdateDistrictBalance(warehouseId, districtId, amount)
+	err = e.db.UpdateDistrictBalance(ctx, warehouseId, districtId, amount)
 
 	if err != nil {
 		return err
 	}
 	var customer *models.Customer
 	if cId > 0 {
-		customer, err = e.db.GetCustomerById(cId, warehouseId, districtId)
+		customer, err = e.db.GetCustomerById(ctx, cId, warehouseId, districtId)
 		if err != nil {
 			return err
 		}
 	} else {
-		customer, err = e.db.GetCustomerByName(cLast, warehouseId, districtId)
+		customer, err = e.db.GetCustomerByName(ctx, cLast, warehouseId, districtId)
 		if err != nil {
 			return err
 		}
@@ -301,14 +303,14 @@ func (e *Executor) DoPayment(
 		var buf string
 
 		buf = fmt.Sprintf("%v %v %v %v %v %v|%v", cId, cDId, cWId, districtId, warehouseId, amount, customer.C_DATA)
-		err = e.db.UpdateCredit(cId, warehouseId, districtId, amount, buf[:cdatalen])
+		err = e.db.UpdateCredit(ctx, cId, warehouseId, districtId, amount, buf[:cdatalen])
 
 		if err != nil {
 			return err
 		}
 
 	} else {
-		err = e.db.UpdateCredit(cId, warehouseId, districtId, amount, "")
+		err = e.db.UpdateCredit(ctx, cId, warehouseId, districtId, amount, "")
 
 		if err != nil {
 			return err
@@ -317,7 +319,7 @@ func (e *Executor) DoPayment(
 
 	hData := fmt.Sprintf("%v    %v", warehouse.W_NAME, district.D_NAME)
 
-	err = e.db.InsertHistory(warehouseId, districtId, time.Now(), amount, hData)
+	err = e.db.InsertHistory(ctx, warehouseId, districtId, time.Now(), amount, hData)
 
 	if err != nil {
 		panic(err)
@@ -328,31 +330,31 @@ func (e *Executor) DoPayment(
 	return nil
 }
 
-func (e *Executor) DoNewOrderTrx(wId, dId, cId int, oEntryD time.Time, iIds []int, iWids []int, iQtys []int) error {
+func (e *Executor) DoNewOrderTrx(ctx context.Context, wId, dId, cId int, oEntryD time.Time, iIds []int, iWids []int, iQtys []int) error {
 	return e.DoTrxRetries(func() error {
-		return e.DoNewOrder(wId, dId, cId, oEntryD, iIds, iWids, iQtys)
+		return e.DoNewOrder(ctx, wId, dId, cId, oEntryD, iIds, iWids, iQtys)
 	})
 }
 
-func (e *Executor) DoNewOrder(wId, dId, cId int, oEntryD time.Time, iIds []int, iWids []int, iQtys []int) error {
+func (e *Executor) DoNewOrder(ctx context.Context, wId, dId, cId int, oEntryD time.Time, iIds []int, iWids []int, iQtys []int) error {
 	var err error
 
-	_, err = e.db.GetWarehouse(wId)
+	_, err = e.db.GetWarehouse(ctx, wId)
 	if err != nil {
 		return err
 	}
 
-	district, err := e.db.GetDistrict(wId, dId)
+	district, err := e.db.GetDistrict(ctx, wId, dId)
 	if err != nil {
 		return err
 	}
 
-	err = e.db.IncrementDistrictOrderId(wId, dId)
+	err = e.db.IncrementDistrictOrderId(ctx, wId, dId)
 	if err != nil {
 		return err
 	}
 
-	_, err = e.db.GetCustomer(cId, wId, dId)
+	_, err = e.db.GetCustomer(ctx, cId, wId, dId)
 	if err != nil {
 		return err
 	}
@@ -365,7 +367,7 @@ func (e *Executor) DoNewOrder(wId, dId, cId int, oEntryD time.Time, iIds []int, 
 		}
 	}
 
-	items, err := e.db.GetItems(iIds)
+	items, err := e.db.GetItems(ctx, iIds)
 	if err != nil {
 		return err
 	}
@@ -374,7 +376,7 @@ func (e *Executor) DoNewOrder(wId, dId, cId int, oEntryD time.Time, iIds []int, 
 		return fmt.Errorf("TPCC defines 1%% of neworder gives a wrong itemid, causing rollback. This happens on purpose")
 	}
 
-	stocks, err := e.db.GetStockInfo(dId, iIds, iWids, allLocal)
+	stocks, err := e.db.GetStockInfo(ctx, dId, iIds, iWids, allLocal)
 	if err != nil {
 		return err
 	}
@@ -401,6 +403,7 @@ func (e *Executor) DoNewOrder(wId, dId, cId int, oEntryD time.Time, iIds []int, 
 		}
 
 		err = e.db.UpdateStock(
+			ctx,
 			(*stocks)[i].S_I_ID,
 			iWids[1],
 			sQuantity,
@@ -425,7 +428,7 @@ func (e *Executor) DoNewOrder(wId, dId, cId int, oEntryD time.Time, iIds []int, 
 		})
 	}
 
-	err = e.db.CreateOrder(district.D_NEXT_O_ID, cId, wId, dId, 0, len(iIds), allLocal, oEntryD, orderLines)
+	err = e.db.CreateOrder(ctx, district.D_NEXT_O_ID, cId, wId, dId, 0, len(iIds), allLocal, oEntryD, orderLines)
 	if err != nil {
 		return err
 	}

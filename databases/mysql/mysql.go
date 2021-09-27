@@ -1,25 +1,26 @@
 package mysql
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
-	"github.com/Percona-Lab/go-tpcc/tpcc/models"
-	_ "github.com/go-sql-driver/mysql"
 	"reflect"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Percona-Lab/go-tpcc/tpcc/models"
+	_ "github.com/go-sql-driver/mysql"
 )
 
 type MySQL struct {
-	transactions bool
-	Client *sql.DB
-	fk bool
+	transactions       bool
+	Client             *sql.DB
+	fk                 bool
 	preparedStatements bool
-	tx *sql.Tx
-	isTx bool
+	tx                 *sql.Tx
+	isTx               bool
 }
-
 
 func NewMySQL(uri string, dbname string, transactions bool) (*MySQL, error) {
 	var uri_ string
@@ -39,15 +40,15 @@ func NewMySQL(uri string, dbname string, transactions bool) (*MySQL, error) {
 	db.SetConnMaxLifetime(-1)
 
 	return &MySQL{
-		transactions: transactions,
-		Client: db,
-		fk: true,
+		transactions:       transactions,
+		Client:             db,
+		fk:                 true,
 		preparedStatements: true,
 	}, nil
 
 }
 
-func (db *MySQL) InsertOne(tableName string, d interface{}) error {
+func (db *MySQL) InsertOne(ctx context.Context, tableName string, d interface{}) error {
 	v := reflect.ValueOf(d)
 	t := v.Type()
 	var fields []string
@@ -90,20 +91,20 @@ func (db *MySQL) InsertOne(tableName string, d interface{}) error {
 		}
 	}
 
-	_,err := db.Client.Exec(
+	_, err := db.Client.Exec(
 		fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", tableName, f, strings.Join(values_, ",")),
-		)
+	)
 
 	return err
 }
 
-func (db *MySQL) InsertBatch(tableName string, d []interface{}) error {
+func (db *MySQL) InsertBatch(ctx context.Context, tableName string, d []interface{}) error {
 	//PS should be always disabled here
 	//batch should be implemented at some stage here
 	p := db.preparedStatements
-	db.preparedStatements  = false
-	for  _, item := range d {
-		err := db.InsertOne(tableName, item)
+	db.preparedStatements = false
+	for _, item := range d {
+		err := db.InsertOne(ctx, tableName, item)
 		if err != nil {
 			return err
 		}
@@ -113,7 +114,6 @@ func (db *MySQL) InsertBatch(tableName string, d []interface{}) error {
 
 	return nil
 }
-
 
 func (db *MySQL) StartTrx() error {
 	tx, err := db.Client.Begin()
@@ -146,10 +146,10 @@ func (db *MySQL) RollbackTrx() error {
 }
 
 func (db *MySQL) transformQuery(query string, args ...interface{}) (string, []interface{}) {
-	if ! db.preparedStatements {
+	if !db.preparedStatements {
 		query = fmt.Sprintf(
 			strings.Replace(query, "?", "%v", -1),
-			args...
+			args...,
 		)
 
 		args = nil
@@ -158,9 +158,9 @@ func (db *MySQL) transformQuery(query string, args ...interface{}) (string, []in
 	return query, args
 }
 
-func (db *MySQL) query(query string, args ...interface{}) (*sql.Rows, error){
+func (db *MySQL) query(query string, args ...interface{}) (*sql.Rows, error) {
 
-	query, args = db.transformQuery(query,args...)
+	query, args = db.transformQuery(query, args...)
 
 	if db.transactions && db.isTx {
 		return db.tx.Query(query, args...)
@@ -171,7 +171,7 @@ func (db *MySQL) query(query string, args ...interface{}) (*sql.Rows, error){
 
 func (db *MySQL) queryRow(query string, args ...interface{}) *sql.Row {
 
-	query, args = db.transformQuery(query,args...)
+	query, args = db.transformQuery(query, args...)
 
 	if db.transactions && db.isTx {
 		return db.tx.QueryRow(query, args...)
@@ -180,9 +180,9 @@ func (db *MySQL) queryRow(query string, args ...interface{}) *sql.Row {
 	return db.Client.QueryRow(query, args...)
 }
 
-func (db *MySQL) exec(query string, args ...interface{}) (sql.Result, error){
+func (db *MySQL) exec(query string, args ...interface{}) (sql.Result, error) {
 
-	query, args = db.transformQuery(query,args...)
+	query, args = db.transformQuery(query, args...)
 
 	if db.transactions && db.isTx {
 		return db.tx.Exec(query, args...)
@@ -191,7 +191,7 @@ func (db *MySQL) exec(query string, args ...interface{}) (sql.Result, error){
 	return db.Client.Exec(query, args...)
 }
 
-func (db *MySQL) IncrementDistrictOrderId(warehouseId int, districtId int) error {
+func (db *MySQL) IncrementDistrictOrderId(ctx context.Context, warehouseId int, districtId int) error {
 
 	query := "UPDATE DISTRICT SET D_NEXT_O_ID = D_NEXT_O_ID+? WHERE D_ID = ? AND D_W_ID = ?"
 
@@ -212,7 +212,7 @@ func (db *MySQL) IncrementDistrictOrderId(warehouseId int, districtId int) error
 
 	return nil
 }
-func (db *MySQL) GetNewOrder(warehouseId int, districtId int) (*models.NewOrder, error) {
+func (db *MySQL) GetNewOrder(ctx context.Context, warehouseId int, districtId int) (*models.NewOrder, error) {
 
 	var query string
 	if db.transactions {
@@ -231,7 +231,7 @@ func (db *MySQL) GetNewOrder(warehouseId int, districtId int) (*models.NewOrder,
 
 	return &no, nil
 }
-func (db *MySQL) DeleteNewOrder(orderId int, warehouseId int, districtId int) error {
+func (db *MySQL) DeleteNewOrder(ctx context.Context, orderId int, warehouseId int, districtId int) error {
 
 	query := "DELETE FROM NEW_ORDER WHERE NO_O_ID = ? AND NO_D_ID = ? AND NO_W_ID = ?"
 	r, err := db.exec(query, orderId, districtId, warehouseId)
@@ -249,11 +249,10 @@ func (db *MySQL) DeleteNewOrder(orderId int, warehouseId int, districtId int) er
 		return fmt.Errorf("unable to match new order for delete")
 	}
 
-
 	return nil
 }
 
-func (db *MySQL) GetCustomer(customerId int, warehouseId int, districtId int) (*models.Customer, error) {
+func (db *MySQL) GetCustomer(ctx context.Context, customerId int, warehouseId int, districtId int) (*models.Customer, error) {
 
 	query := "SELECT C_ID, C_D_ID, C_W_ID, C_FIRST, C_MIDDLE, C_LAST, C_STREET_1, C_STREET_2, C_CITY, C_STATE, C_ZIP, " +
 		"C_PHONE, C_SINCE, C_CREDIT, C_CREDIT_LIM, C_DISCOUNT, C_BALANCE, C_YTD_PAYMENT, C_PAYMENT_CNT, C_DELIVERY_CNT, C_DATA " +
@@ -294,16 +293,16 @@ func (db *MySQL) GetCustomer(customerId int, warehouseId int, districtId int) (*
 	return &customer, nil
 }
 
-func (db *MySQL) UpdateOrders(orderId int, warehouseId int, districtId int, oCarrierId int, deliveryDate time.Time) error {
+func (db *MySQL) UpdateOrders(ctx context.Context, orderId int, warehouseId int, districtId int, oCarrierId int, deliveryDate time.Time) error {
 
 	query := "UPDATE ORDERS SET O_CARRIER_ID = ? WHERE O_ID = ? AND O_D_ID = ? AND O_W_ID = ?"
 	r, err := db.exec(query, oCarrierId, orderId, districtId, warehouseId)
 	if err != nil {
 		return err
 	}
-	ra,err := r.RowsAffected()
+	ra, err := r.RowsAffected()
 	if err != nil {
-		 return err
+		return err
 	}
 
 	if ra == 0 {
@@ -315,7 +314,7 @@ func (db *MySQL) UpdateOrders(orderId int, warehouseId int, districtId int, oCar
 	if err != nil {
 		return err
 	}
-	ra,err = r.RowsAffected()
+	ra, err = r.RowsAffected()
 	if err != nil {
 		return err
 	}
@@ -323,7 +322,7 @@ func (db *MySQL) UpdateOrders(orderId int, warehouseId int, districtId int, oCar
 	return nil
 }
 
-func (db *MySQL) SumOLAmount(orderId int, warehouseId int, districtId int) (float64, error) {
+func (db *MySQL) SumOLAmount(ctx context.Context, orderId int, warehouseId int, districtId int) (float64, error) {
 
 	query := "SELECT SUM(ol_amount) FROM ORDER_LINE WHERE OL_O_ID = ? AND OL_D_ID = ? AND OL_W_ID = ?"
 	row := db.queryRow(query, orderId, districtId, warehouseId)
@@ -336,8 +335,7 @@ func (db *MySQL) SumOLAmount(orderId int, warehouseId int, districtId int) (floa
 	return sum, nil
 }
 
-
-func (db *MySQL) UpdateCustomer(customerId int, warehouseId int, districtId int, sumOlTotal float64) error {
+func (db *MySQL) UpdateCustomer(ctx context.Context, customerId int, warehouseId int, districtId int, sumOlTotal float64) error {
 	query := "UPDATE CUSTOMER SET C_BALANCE = C_BALANCE + ? WHERE C_ID = ? AND C_D_ID = ? AND C_W_ID = ?"
 
 	res, err := db.exec(query, sumOlTotal, customerId, districtId, warehouseId)
@@ -357,7 +355,7 @@ func (db *MySQL) UpdateCustomer(customerId int, warehouseId int, districtId int,
 	return nil
 }
 
-func (db *MySQL) GetNextOrderId(warehouseId int, districtId int) (int, error) {
+func (db *MySQL) GetNextOrderId(ctx context.Context, warehouseId int, districtId int) (int, error) {
 	query := "SELECT D_NEXT_O_ID FROM DISTRICT WHERE D_ID = ? AND D_W_ID = ?"
 
 	row := db.queryRow(query, districtId, warehouseId)
@@ -370,14 +368,13 @@ func (db *MySQL) GetNextOrderId(warehouseId int, districtId int) (int, error) {
 	return dn, nil
 }
 
-func (db *MySQL) GetStockCount(orderIdLt int, orderIdGt int, threshold int, warehouseId int, districtId int) (int64, error) {
+func (db *MySQL) GetStockCount(ctx context.Context, orderIdLt int, orderIdGt int, threshold int, warehouseId int, districtId int) (int64, error) {
 	query := "SELECT COUNT(DISTINCT(OL_I_ID)) FROM " +
 		"ORDER_LINE, STOCK " +
 		"WHERE " +
 		"OL_W_ID = ? AND OL_D_ID = ? " +
 		"AND OL_O_ID < ? AND OL_O_ID >= ? " +
 		"AND S_W_ID = ? AND S_I_ID = OL_I_ID AND S_QUANTITY < ?"
-
 
 	row := db.queryRow(query, warehouseId, districtId, orderIdLt, orderIdGt, warehouseId, threshold)
 	var count int64
@@ -389,8 +386,7 @@ func (db *MySQL) GetStockCount(orderIdLt int, orderIdGt int, threshold int, ware
 	return count, nil
 }
 
-
-func (db *MySQL) GetCustomerById(customerId int, warehouseId int, districtId int) (*models.Customer, error) {
+func (db *MySQL) GetCustomerById(ctx context.Context, customerId int, warehouseId int, districtId int) (*models.Customer, error) {
 	var c models.Customer
 
 	query := "SELECT C_ID, C_FIRST, C_MIDDLE, C_LAST, C_BALANCE FROM CUSTOMER WHERE C_ID = ? AND C_W_ID = ? and C_D_ID = ?"
@@ -401,14 +397,14 @@ func (db *MySQL) GetCustomerById(customerId int, warehouseId int, districtId int
 		return nil, err
 	}
 
-	return &c, nil;
+	return &c, nil
 }
 
-func (db *MySQL) GetCustomerByName(name string, warehouseId int, districtId int) (*models.Customer, error) {
+func (db *MySQL) GetCustomerByName(ctx context.Context, name string, warehouseId int, districtId int) (*models.Customer, error) {
 
 	query := "SELECT C_ID, C_FIRST, C_MIDDLE, C_LAST, C_BALANCE FROM CUSTOMER WHERE C_W_ID = ? AND C_D_ID = ? AND C_LAST = ?"
 
-	rows,err := db.query(query, warehouseId, districtId, name)
+	rows, err := db.query(query, warehouseId, districtId, name)
 	defer rows.Close()
 	if err != nil {
 		return nil, err
@@ -430,10 +426,10 @@ func (db *MySQL) GetCustomerByName(name string, warehouseId int, districtId int)
 		return nil, fmt.Errorf("no customers found with given name: %s", name)
 	}
 
-	return &customers[(len(customers)-1)/2],nil
+	return &customers[(len(customers)-1)/2], nil
 }
 
-func (db *MySQL) GetLastOrder(customerId int, warehouseId int, districtId int) (*models.Order, error) {
+func (db *MySQL) GetLastOrder(ctx context.Context, customerId int, warehouseId int, districtId int) (*models.Order, error) {
 
 	query := "SELECT O_ID, O_CARRIER_ID, O_ENTRY_D FROM ORDERS WHERE O_W_ID = ? AND O_D_ID = ? AND O_C_ID = ?"
 
@@ -449,7 +445,7 @@ func (db *MySQL) GetLastOrder(customerId int, warehouseId int, districtId int) (
 	return &m, nil
 }
 
-func (db *MySQL) GetOrderLines(orderId int, warehouseId int, districtId int) (*[]models.OrderLine, error) {
+func (db *MySQL) GetOrderLines(ctx context.Context, orderId int, warehouseId int, districtId int) (*[]models.OrderLine, error) {
 
 	query := "SELECT OL_O_ID, OL_D_ID, OL_W_ID, OL_NUMBER, OL_I_ID, OL_SUPPLY_W_ID, OL_DELIVERY_D, OL_QUANTITY, OL_AMOUNT, OL_DIST_INFO FROM ORDER_LINE " +
 		"WHERE OL_O_ID = ? AND OL_W_ID = ? AND OL_D_ID = ?"
@@ -459,7 +455,6 @@ func (db *MySQL) GetOrderLines(orderId int, warehouseId int, districtId int) (*[
 	if err != nil {
 		return nil, err
 	}
-
 
 	var ol []models.OrderLine
 
@@ -488,8 +483,7 @@ func (db *MySQL) GetOrderLines(orderId int, warehouseId int, districtId int) (*[
 
 }
 
-
-func (db *MySQL) GetWarehouse(warehouseId int) (*models.Warehouse, error) {
+func (db *MySQL) GetWarehouse(ctx context.Context, warehouseId int) (*models.Warehouse, error) {
 
 	query := "SELECT W_ID, W_NAME, W_STREET_1, W_STREET_2, W_CITY, W_STATE, W_ZIP, W_TAX, W_YTD FROM WAREHOUSE WHERE W_ID = ?"
 
@@ -497,7 +491,7 @@ func (db *MySQL) GetWarehouse(warehouseId int) (*models.Warehouse, error) {
 
 	var w models.Warehouse
 
-	err := row.Scan(&w.W_ID, &w.W_NAME, &w.W_STREET_1, &w.W_STREET_2, &w.W_CITY, &w.W_STATE, &w.W_ZIP, &w.W_TAX, &w.W_YTD, )
+	err := row.Scan(&w.W_ID, &w.W_NAME, &w.W_STREET_1, &w.W_STREET_2, &w.W_CITY, &w.W_STATE, &w.W_ZIP, &w.W_TAX, &w.W_YTD)
 	if err != nil {
 		return nil, err
 	}
@@ -505,7 +499,7 @@ func (db *MySQL) GetWarehouse(warehouseId int) (*models.Warehouse, error) {
 	return &w, nil
 }
 
-func (db *MySQL) UpdateWarehouseBalance(warehouseId int, amount float64) error {
+func (db *MySQL) UpdateWarehouseBalance(ctx context.Context, warehouseId int, amount float64) error {
 	query := "UPDATE WAREHOUSE SET W_YTD = W_YTD + ? WHERE W_ID = ?"
 
 	r, err := db.exec(query, amount, warehouseId)
@@ -513,7 +507,7 @@ func (db *MySQL) UpdateWarehouseBalance(warehouseId int, amount float64) error {
 		return err
 	}
 
-	ra,err := r.RowsAffected()
+	ra, err := r.RowsAffected()
 	if err != nil {
 		return err
 	}
@@ -522,11 +516,10 @@ func (db *MySQL) UpdateWarehouseBalance(warehouseId int, amount float64) error {
 		return fmt.Errorf("unable to match warehouse")
 	}
 
-
 	return nil
 }
 
-func (db *MySQL) GetDistrict(warehouseId int, districtId int) (*models.District, error) {
+func (db *MySQL) GetDistrict(ctx context.Context, warehouseId int, districtId int) (*models.District, error) {
 
 	var query string
 	if db.transactions {
@@ -558,7 +551,7 @@ func (db *MySQL) GetDistrict(warehouseId int, districtId int) (*models.District,
 
 	return &d, nil
 }
-func (db *MySQL) UpdateDistrictBalance(warehouseId int, districtId int, amount float64) error {
+func (db *MySQL) UpdateDistrictBalance(ctx context.Context, warehouseId int, districtId int, amount float64) error {
 
 	query := "UPDATE DISTRICT SET D_YTD = D_YTD + ? WHERE D_W_ID = ? AND D_ID = ?"
 
@@ -579,10 +572,10 @@ func (db *MySQL) UpdateDistrictBalance(warehouseId int, districtId int, amount f
 	return nil
 }
 
-func (db *MySQL) InsertHistory(warehouseId int, districtId int, date time.Time, amount float64, data string) error {
+func (db *MySQL) InsertHistory(ctx context.Context, warehouseId int, districtId int, date time.Time, amount float64, data string) error {
 	query := "INSERT INTO HISTORY (H_C_ID, H_D_ID, H_W_ID, H_C_W_ID, H_C_D_ID, H_DATE, H_AMOUNT, H_DATA) VALUES (?,?,?,?,?,?,?,?)"
 
-	_,err := db.exec(query, 1, districtId, warehouseId, warehouseId, districtId, date, amount, data)
+	_, err := db.exec(query, 1, districtId, warehouseId, warehouseId, districtId, date, amount, data)
 	if err != nil {
 		return err
 	}
@@ -590,7 +583,7 @@ func (db *MySQL) InsertHistory(warehouseId int, districtId int, date time.Time, 
 	return nil
 }
 
-func (db *MySQL) GetCustomerIdOrder(orderId int, warehouseId int, districtId int) (int, error) {
+func (db *MySQL) GetCustomerIdOrder(ctx context.Context, orderId int, warehouseId int, districtId int) (int, error) {
 
 	query := "SELECT O_C_ID FROM ORDERS WHERE O_ID = ? AND O_D_ID = ? AND O_W_ID = ?"
 
@@ -607,16 +600,16 @@ func (db *MySQL) GetCustomerIdOrder(orderId int, warehouseId int, districtId int
 	return cId, nil
 }
 
-func (db *MySQL) UpdateCredit(customerId int, warehouseId int, districtId int, balance float64, data string) error {
+func (db *MySQL) UpdateCredit(ctx context.Context, customerId int, warehouseId int, districtId int, balance float64, data string) error {
 
 	var err error
 	var res sql.Result
 
 	if len(data) > 0 {
-		res, err = db.exec("UPDATE CUSTOMER SET " +
-			"C_BALANCE = C_BALANCE + ?, C_YTD_PAYMENT = C_YTD_PAYMENT + ?, C_PAYMENT_CNT = C_PAYMENT_CNT + ?, C_DATA = ? " +
+		res, err = db.exec("UPDATE CUSTOMER SET "+
+			"C_BALANCE = C_BALANCE + ?, C_YTD_PAYMENT = C_YTD_PAYMENT + ?, C_PAYMENT_CNT = C_PAYMENT_CNT + ?, C_DATA = ? "+
 			"WHERE C_ID = ? AND C_W_ID = ? AND C_D_ID = ?",
-			-1* balance,
+			-1*balance,
 			balance,
 			1,
 			data,
@@ -625,10 +618,10 @@ func (db *MySQL) UpdateCredit(customerId int, warehouseId int, districtId int, b
 			districtId,
 		)
 	} else {
-		res, err = db.exec("UPDATE CUSTOMER SET " +
-			"C_BALANCE = C_BALANCE + ?, C_YTD_PAYMENT = C_YTD_PAYMENT + ?, C_PAYMENT_CNT = C_PAYMENT_CNT + ? " +
+		res, err = db.exec("UPDATE CUSTOMER SET "+
+			"C_BALANCE = C_BALANCE + ?, C_YTD_PAYMENT = C_YTD_PAYMENT + ?, C_PAYMENT_CNT = C_PAYMENT_CNT + ? "+
 			"WHERE C_ID = ? AND C_W_ID = ? AND C_D_ID = ?",
-			-1* balance,
+			-1*balance,
 			balance,
 			1,
 			customerId,
@@ -653,8 +646,7 @@ func (db *MySQL) UpdateCredit(customerId int, warehouseId int, districtId int, b
 	return nil
 }
 
-
-func (db *MySQL) CreateOrder(
+func (db *MySQL) CreateOrder(ctx context.Context,
 	orderId int,
 	customerId int,
 	warehouseId int,
@@ -675,7 +667,7 @@ func (db *MySQL) CreateOrder(
 	}
 
 	query = "INSERT INTO NEW_ORDER (NO_O_ID, NO_D_ID, NO_W_ID) VALUES (?, ?, ?)"
-	_,err = db.exec(query, orderId, districtId, warehouseId)
+	_, err = db.exec(query, orderId, districtId, warehouseId)
 	if err != nil {
 		return err
 	}
@@ -694,10 +686,10 @@ func (db *MySQL) CreateOrder(
 	return nil
 }
 
-func (db *MySQL) GetItems(itemIds []int) (*[]models.Item, error) {
+func (db *MySQL) GetItems(ctx context.Context, itemIds []int) (*[]models.Item, error) {
 	var itemIds_ []string
 
-	for _,item := range itemIds {
+	for _, item := range itemIds {
 		itemIds_ = append(itemIds_, strconv.Itoa(item))
 	}
 
@@ -724,7 +716,7 @@ func (db *MySQL) GetItems(itemIds []int) (*[]models.Item, error) {
 	return &items, nil
 }
 
-func (db *MySQL) UpdateStock(stockId int, warehouseId int, quantity int, ytd int, ordercnt int, remotecnt int) error {
+func (db *MySQL) UpdateStock(ctx context.Context, stockId int, warehouseId int, quantity int, ytd int, ordercnt int, remotecnt int) error {
 
 	query := "UPDATE STOCK SET S_QUANTITY = ?, S_YTD = ?, S_ORDER_CNT = ?, S_REMOTE_CNT = ? WHERE S_I_ID = ? AND S_W_ID = ?"
 
@@ -733,7 +725,7 @@ func (db *MySQL) UpdateStock(stockId int, warehouseId int, quantity int, ytd int
 		return err
 	}
 
-	ra,err := r.RowsAffected()
+	ra, err := r.RowsAffected()
 	if err != nil {
 		return err
 	}
@@ -745,7 +737,7 @@ func (db *MySQL) UpdateStock(stockId int, warehouseId int, quantity int, ytd int
 	return nil
 }
 
-func (db *MySQL) GetStockInfo(districtId int, iIds []int, iWids []int, allLocal int) (*[]models.Stock, error) {
+func (db *MySQL) GetStockInfo(ctx context.Context, districtId int, iIds []int, iWids []int, allLocal int) (*[]models.Stock, error) {
 
 	var buf string
 
@@ -761,14 +753,14 @@ func (db *MySQL) GetStockInfo(districtId int, iIds []int, iWids []int, allLocal 
 	} else {
 		var p []string
 
-		for i,item := range iIds {
+		for i, item := range iIds {
 			p = append(p, fmt.Sprintf("(S_W_ID = %d AND S_I_ID = %d)", iWids[i], item))
 		}
 
 		buf = strings.Join(p, " OR ")
 	}
 
-	query := fmt.Sprintf("SELECT S_I_ID, S_W_ID, S_QUANTITY, S_DATA, S_YTD, S_ORDER_CNT, S_REMOTE_CNT, S_DIST_%02d FROM STOCK " +
+	query := fmt.Sprintf("SELECT S_I_ID, S_W_ID, S_QUANTITY, S_DATA, S_YTD, S_ORDER_CNT, S_REMOTE_CNT, S_DIST_%02d FROM STOCK "+
 		"WHERE %s", districtId, buf)
 
 	rows, err := db.query(query)

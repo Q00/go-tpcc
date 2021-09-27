@@ -1,15 +1,16 @@
 package tpcc
 
 import (
+	"context"
+
 	"github.com/Percona-Lab/go-tpcc/helpers"
 	"github.com/Percona-Lab/go-tpcc/tpcc/models"
 )
 
-
-func (w *Worker) LoadItems() {
+func (w *Worker) LoadItems(ctx context.Context) {
 	originalRows := helpers.SelectUniqueIds(int(w.sc.Items/10), 1, w.sc.Items)
 
-	for i:=1; i < w.sc.Items+1; i++ {
+	for i := 1; i < w.sc.Items+1; i++ {
 		isOriginalRow := false
 		for _, item := range originalRows {
 			if item == i {
@@ -17,9 +18,9 @@ func (w *Worker) LoadItems() {
 				break
 			}
 		}
-		w.ex.SaveBatch(TABLENAME_ITEM, w.GenerateItem(i, isOriginalRow))
+		w.ex.SaveBatch(ctx, TABLENAME_ITEM, w.GenerateItem(i, isOriginalRow))
 	}
-	w.ex.Flush(TABLENAME_ITEM)
+	w.ex.Flush(ctx, TABLENAME_ITEM)
 }
 func (w *Worker) GenerateItem(id int, isOriginalRow bool) models.Item {
 

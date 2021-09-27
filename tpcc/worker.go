@@ -2,43 +2,42 @@ package tpcc
 
 import (
 	"context"
+	"sync"
+	"time"
+
 	"github.com/Percona-Lab/go-tpcc/databases"
 	"github.com/Percona-Lab/go-tpcc/executor"
 	"github.com/Percona-Lab/go-tpcc/helpers"
-	"sync"
-	"fmt"
-	"time"
 )
 
 type Configuration struct {
-	DBDriver string
-	URI string
-	Transactions bool
-	DBName string
-	Threads int
-	WriteConcern int
-	ReadConcern int
+	DBDriver       string
+	URI            string
+	Transactions   bool
+	DBName         string
+	Threads        int
+	WriteConcern   int
+	ReadConcern    int
 	ReportInterval int
-	WareHouses int
-	ScaleFactor float64
-	PercentFail int
+	WareHouses     int
+	ScaleFactor    float64
+	PercentFail    int
 }
 
-
 type Worker struct {
-	cfg *Configuration
-	sc *ScaleParameters
-	threadId  int
-	ex *executor.Executor
-	ctx context.Context
-	wg *sync.WaitGroup
-	c chan Transaction
+	cfg      *Configuration
+	sc       *ScaleParameters
+	threadId int
+	ex       *executor.Executor
+	// ctx          context.Context
+	wg           *sync.WaitGroup
+	c            chan Transaction
 	denormalized bool
 }
 
-func NewWorker(ctx context.Context, configuration *Configuration, wg *sync.WaitGroup, c chan Transaction, threadId int) (*Worker, error) {
+func NewWorker(configuration *Configuration, wg *sync.WaitGroup, c chan Transaction, threadId int) (*Worker, error) {
 
-	sc,_ := NewScaleParameters(
+	sc, _ := NewScaleParameters(
 		configuration.ScaleFactor,
 		NUM_ITEMS,
 		configuration.WareHouses,
@@ -56,19 +55,18 @@ func NewWorker(ctx context.Context, configuration *Configuration, wg *sync.WaitG
 	if err != nil {
 		return nil, err
 	}
-	ex, err := executor.NewExecutor(d,256)
+	ex, err := executor.NewExecutor(d, 256)
 	if err != nil {
 		return nil, err
 	}
 
-	w := &Worker {
-		threadId:	threadId,
-		cfg: configuration,
-		sc: sc,
-		ex: ex,
-		ctx: ctx,
-		wg: wg,
-		c: c,
+	w := &Worker{
+		threadId:     threadId,
+		cfg:          configuration,
+		sc:           sc,
+		ex:           ex,
+		wg:           wg,
+		c:            c,
 		denormalized: den,
 	}
 
@@ -76,11 +74,11 @@ func NewWorker(ctx context.Context, configuration *Configuration, wg *sync.WaitG
 }
 
 type ScaleParameters struct {
-	Items int
-	Warehouses int
+	Items                 int
+	Warehouses            int
 	DistrictsPerWarehouse int
-	CustomersPerDistrict int
-	NewOrdersPerDistrict int
+	CustomersPerDistrict  int
+	NewOrdersPerDistrict  int
 }
 
 func NewScaleParameters(
@@ -94,13 +92,14 @@ func NewScaleParameters(
 	s := &ScaleParameters{
 		Items:                 int(float64(items) / scaleFactor),
 		DistrictsPerWarehouse: districtsPerWarehouse,
-		CustomersPerDistrict:  int(float64(customersPerDistrict)/scaleFactor),
-		NewOrdersPerDistrict:  int(float64(newOrdersPerDistrict)/scaleFactor),
-		Warehouses: warehouses,
+		CustomersPerDistrict:  int(float64(customersPerDistrict) / scaleFactor),
+		NewOrdersPerDistrict:  int(float64(newOrdersPerDistrict) / scaleFactor),
+		Warehouses:            warehouses,
 	}
 
 	return s, nil
 }
+
 type TransactionType int
 
 const (
@@ -113,16 +112,16 @@ const (
 
 type Transaction struct {
 	ThreadId int
-	Type TransactionType
-	Failed bool
-	Time float64
+	Type     TransactionType
+	Failed   bool
+	Time     float64
 }
 
-func (w *Worker) Execute() {
+func (w *Worker) Execute(ctx context.Context) {
 	defer w.wg.Done()
 	for {
 		select {
-		case <- w.ctx.Done():
+		case <-ctx.Done():
 			return
 		default:
 			t := time.Now()
@@ -133,23 +132,22 @@ func (w *Worker) Execute() {
 			switch r := helpers.RandInt(1, 100); {
 			case r <= 4:
 				trx.Type = StockLevelTrx
-				status = w.DoStockLevelTrx()
+				status = w.DoStockLevelTrx(ctx)
 			case r <= 8:
 				trx.Type = DeliveryTrx
-				status = w.DoDelivery()
+				status = w.DoDelivery(ctx)
 			case r <= 12:
 				trx.Type = OrderStatusTrx
-				status = w.DoOrderStatus()
+				status = w.DoOrderStatus(ctx)
 			case r <= 55:
 				trx.Type = PaymentTrx
-				status = w.DoPayment()
+				status = w.DoPayment(ctx)
 			default:
 				trx.Type = NewOrderTrx
-				status = w.DoNewOrder()
+				status = w.DoNewOrder(ctx)
 			}
 
-
-			trx.Time = float64(time.Now().Sub(t).Nanoseconds())/1e6
+			trx.Time = float64(time.Now().Sub(t).Nanoseconds()) / 1e6
 
 			trx.Failed = false
 			if status != nil {
@@ -161,30 +159,30 @@ func (w *Worker) Execute() {
 	}
 }
 
-func (w *Worker) DoStockLevelTrx() error {
+func (w *Worker) DoStockLevelTrx(ctx context.Context) error {
 	warehouseId := helpers.RandInt(1, w.sc.Warehouses)
 	districtId := helpers.RandInt(1, w.sc.DistrictsPerWarehouse)
 	threshold := helpers.RandInt(MIN_STOCK_LEVEL_THRESHOLD, MAX_STOCK_LEVEL_THRESHOLD)
 
-	return w.ex.DoStockLevelTrx(warehouseId, districtId, threshold)
+	return w.ex.DoStockLevelTrx(ctx, warehouseId, districtId, threshold)
 }
 
-func (w *Worker) DoDelivery() error {
+func (w *Worker) DoDelivery(ctx context.Context) error {
 	warehouseId := helpers.RandInt(1, w.sc.Warehouses)
 	OCarrierId := helpers.RandInt(MIN_CARRIER_ID, MAX_CARRIER_ID)
 	OlDeliveryD := time.Now()
 
-	return w.ex.DoDelivery(warehouseId, OCarrierId, OlDeliveryD, w.sc.DistrictsPerWarehouse)
+	return w.ex.DoDelivery(ctx, warehouseId, OCarrierId, OlDeliveryD, w.sc.DistrictsPerWarehouse)
 }
 
-func (w *Worker) DoOrderStatus() error {
+func (w *Worker) DoOrderStatus(ctx context.Context) error {
 	wId := helpers.RandInt(1, w.sc.Warehouses)
 	dId := helpers.RandInt(1, w.sc.DistrictsPerWarehouse)
 	cId := 0
 	cLast := ""
 
-	if helpers.RandInt(1,100) <= 60 {
-		sylN := (helpers.RandInt(0, 256)|helpers.RandInt(0,1000)+helpers.RandInt(0,256))%1000
+	if helpers.RandInt(1, 100) <= 60 {
+		sylN := (helpers.RandInt(0, 256) | helpers.RandInt(0, 1000) + helpers.RandInt(0, 256)) % 1000
 
 		cLast = SYLLABLES[sylN/100] +
 			SYLLABLES[(sylN/10)%10] +
@@ -194,10 +192,10 @@ func (w *Worker) DoOrderStatus() error {
 		cId = helpers.RandInt(1, w.sc.CustomersPerDistrict)
 	}
 
-	return w.ex.DoOrderStatus(wId, dId, cId, cLast)
+	return w.ex.DoOrderStatus(ctx, wId, dId, cId, cLast)
 }
 
-func (w *Worker) DoPayment() error {
+func (w *Worker) DoPayment(ctx context.Context) error {
 	wId := helpers.RandInt(1, w.sc.Warehouses)
 	dId := helpers.RandInt(1, w.sc.DistrictsPerWarehouse)
 	cWId := 0
@@ -216,7 +214,7 @@ func (w *Worker) DoPayment() error {
 	}
 
 	if helpers.RandInt(1, 100) <= 60 {
-		sylN := (helpers.RandInt(0, 256)|helpers.RandInt(0,1000)+helpers.RandInt(0,256))%1000
+		sylN := (helpers.RandInt(0, 256) | helpers.RandInt(0, 1000) + helpers.RandInt(0, 256)) % 1000
 
 		cLast = SYLLABLES[sylN/100] +
 			SYLLABLES[(sylN/10)%10] +
@@ -226,10 +224,10 @@ func (w *Worker) DoPayment() error {
 		cId = helpers.RandInt(1, w.sc.CustomersPerDistrict)
 	}
 
-	return w.ex.DoPayment(wId, dId, hAmount, cWId, cDId, cId, cLast, hDate, BAD_CREDIT, MAX_C_DATA)
+	return w.ex.DoPayment(ctx, wId, dId, hAmount, cWId, cDId, cId, cLast, hDate, BAD_CREDIT, MAX_C_DATA)
 }
 
-func (w *Worker) DoNewOrder() error {
+func (w *Worker) DoNewOrder(ctx context.Context) error {
 	wId := helpers.RandInt(1, w.sc.Warehouses)
 	dId := helpers.RandInt(1, w.sc.DistrictsPerWarehouse)
 	cId := helpers.RandInt(1, w.sc.CustomersPerDistrict)
@@ -238,7 +236,7 @@ func (w *Worker) DoNewOrder() error {
 
 	rollback := false
 
-	if helpers.RandInt(1,100) < w.cfg.PercentFail  {
+	if helpers.RandInt(1, 100) < w.cfg.PercentFail {
 		rollback = true
 	}
 
@@ -248,14 +246,14 @@ func (w *Worker) DoNewOrder() error {
 
 	for i := 0; i < olCnt; i++ {
 		if rollback && i+1 == olCnt {
-			iIds = append(iIds, w.sc.Items + 1)
+			iIds = append(iIds, w.sc.Items+1)
 		} else {
 			//todo
 			//it should be generated by the non-uniform thing
 			iIds = append(iIds, helpers.RandInt(1, w.sc.Items))
 		}
 
-		if w.sc.Warehouses > 1 && helpers.RandInt(1, 100) == 42  {
+		if w.sc.Warehouses > 1 && helpers.RandInt(1, 100) == 42 {
 			iWIds = append(iWIds, helpers.RandIntExcluding(1, w.sc.Warehouses, wId))
 		} else {
 			iWIds = append(iWIds, wId)
@@ -264,7 +262,7 @@ func (w *Worker) DoNewOrder() error {
 		iQtys = append(iQtys, helpers.RandInt(1, MAX_OL_QUANTITY))
 	}
 
-	return w.ex.DoNewOrder(wId, dId, cId, oEntryD, iIds, iWIds, iQtys)
+	return w.ex.DoNewOrder(ctx, wId, dId, cId, oEntryD, iIds, iWIds, iQtys)
 }
 
 func (w *Worker) CreateIndexes() error {

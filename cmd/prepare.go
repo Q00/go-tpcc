@@ -3,16 +3,15 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"github.com/spf13/cobra"
-	"github.com/Percona-Lab/go-tpcc/tpcc"
-)
 
+	"github.com/Percona-Lab/go-tpcc/tpcc"
+	"github.com/spf13/cobra"
+)
 
 var prepareCmd = &cobra.Command{
 	Use:   "prepare",
 	Short: "Prepare the TPC-C dataset",
 	Run: func(cmd *cobra.Command, args []string) {
-
 
 		warehouses, _ := cmd.PersistentFlags().GetInt("warehouses")
 		threads, _ := cmd.PersistentFlags().GetInt("threads")
@@ -21,21 +20,23 @@ var prepareCmd = &cobra.Command{
 		dbdriver, _ := cmd.Root().PersistentFlags().GetString("dbdriver")
 
 		uri, _ := cmd.Root().PersistentFlags().GetString("uri")
-		trx,_ := cmd.Root().PersistentFlags().GetBool("trx")
+		trx, _ := cmd.Root().PersistentFlags().GetBool("trx")
 
 		wj := make(chan int, warehouses)
 		wr := make(chan int, warehouses)
+
+		ctx := context.Background()
 
 		if dbname == "" || uri == "" {
 			panic("empty")
 		}
 
-		for i:=1;i <= warehouses; i++ {
+		for i := 1; i <= warehouses; i++ {
 			wj <- i
 		}
 
 		c := tpcc.Configuration{
-			DBDriver: 		dbdriver,
+			DBDriver:       dbdriver,
 			DBName:         dbname,
 			Threads:        threads,
 			WriteConcern:   0,
@@ -43,11 +44,11 @@ var prepareCmd = &cobra.Command{
 			ReportInterval: 0,
 			WareHouses:     warehouses,
 			ScaleFactor:    scalefactor,
-			URI: uri,
-			Transactions: trx,
+			URI:            uri,
+			Transactions:   trx,
 		}
 
-		ddl, err := tpcc.NewWorker(context.Background(), &c, nil, nil, 0)
+		ddl, err := tpcc.NewWorker(&c, nil, nil, 0)
 		if err != nil {
 			panic(err)
 		}
@@ -63,23 +64,23 @@ var prepareCmd = &cobra.Command{
 			panic(err)
 		}
 
-		for i:=0; i < threads; i++ {
+		for i := 0; i < threads; i++ {
 			go func(i int) {
 
-				w, err := tpcc.NewWorker(context.Background(), &c, nil, nil, i)
-				if err != nil  {
+				w, err := tpcc.NewWorker(&c, nil, nil, i)
+				if err != nil {
 					panic(err)
 				}
 
 				if i == 0 {
 					fmt.Println("Loading items")
-					w.LoadItems()
+					w.LoadItems(ctx)
 				}
 
 				for wId := range wj {
 
 					fmt.Printf("Loading warehouse %d\n", wId)
-					err := w.LoadWarehouse(wId)
+					err := w.LoadWarehouse(ctx, wId)
 					if err != nil {
 						panic(err)
 					}
@@ -89,8 +90,8 @@ var prepareCmd = &cobra.Command{
 			}(i)
 		}
 
-		for i:=1;i <= warehouses; i++ {
-			<- wr
+		for i := 1; i <= warehouses; i++ {
+			<-wr
 		}
 
 		fmt.Println("Creating indexes")
@@ -99,8 +100,6 @@ var prepareCmd = &cobra.Command{
 		if err != nil {
 			panic(err)
 		}
-
-
 
 		fmt.Println("... done")
 
