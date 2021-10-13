@@ -52,11 +52,11 @@ func (db *PostgreSQL) StartTrx() error {
 	return nil
 }
 
-func (db *PostgreSQL) CommitTrx() error {
+func (db *PostgreSQL) CommitTrx(ctx context.Context) error {
 	return db.tx.Commit(context.Background())
 }
 
-func (db *PostgreSQL) RollbackTrx() error {
+func (db *PostgreSQL) RollbackTrx(ctx context.Context) error {
 	return db.tx.Rollback(context.Background())
 }
 
@@ -192,6 +192,10 @@ func (db *PostgreSQL) IncrementDistrictOrderId(ctx context.Context, warehouseId 
 	}
 
 	return nil
+}
+
+func (db *PostgreSQL) CheckNewOrder(ctx context.Context, warehouseId int, districtId int) (*models.NewOrder, *string, error) {
+	return nil, nil, nil
 }
 
 func (db *PostgreSQL) GetNewOrder(ctx context.Context, warehouseId int, districtId int) (*models.NewOrder, error) {

@@ -125,7 +125,7 @@ func (db *MySQL) StartTrx() error {
 	return nil
 }
 
-func (db *MySQL) CommitTrx() error {
+func (db *MySQL) CommitTrx(ctx context.Context) error {
 	err := db.tx.Commit()
 	if err != nil {
 		return err
@@ -135,7 +135,7 @@ func (db *MySQL) CommitTrx() error {
 	return nil
 }
 
-func (db *MySQL) RollbackTrx() error {
+func (db *MySQL) RollbackTrx(ctx context.Context) error {
 	err := db.tx.Rollback()
 	if err != nil {
 		return err
@@ -212,6 +212,11 @@ func (db *MySQL) IncrementDistrictOrderId(ctx context.Context, warehouseId int, 
 
 	return nil
 }
+
+func (db *MySQL) CheckNewOrder(ctx context.Context, warehouseId int, districtId int) (*models.NewOrder, *string, error) {
+	return nil, nil, nil
+}
+
 func (db *MySQL) GetNewOrder(ctx context.Context, warehouseId int, districtId int) (*models.NewOrder, error) {
 
 	var query string

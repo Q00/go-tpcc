@@ -13,14 +13,15 @@ import (
 
 type Database interface {
 	StartTrx() error
-	CommitTrx() error
-	RollbackTrx() error
+	CommitTrx(ctx context.Context) error
+	RollbackTrx(ctx context.Context) error
 	CreateSchema() error
 	CreateIndexes() error
 	InsertOne(ctx context.Context, ableName string, d interface{}) error
 	InsertBatch(ctx context.Context, tableName string, d []interface{}) error
 	IncrementDistrictOrderId(ctx context.Context, warehouseId int, districtId int) error
 	GetNewOrder(ctx context.Context, warehouseId int, districtId int) (*models.NewOrder, error)
+	CheckNewOrder(ctx context.Context, warehouseId int, districtId int) (*models.NewOrder, *string, error)
 	DeleteNewOrder(ctx context.Context, orderId int, warehouseId int, districtId int) error
 	GetCustomer(ctx context.Context, customerId int, warehouseId int, districtId int) (*models.Customer, error)
 	GetCustomerIdOrder(ctx context.Context, orderId int, warehouseId int, districtId int) (int, error)

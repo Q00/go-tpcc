@@ -71,7 +71,7 @@ func (db *MongoDB) StartTrx() error {
 	return nil
 }
 
-func (db *MongoDB) CommitTrx() error {
+func (db *MongoDB) CommitTrx(ctx context.Context) error {
 	sess := mongo.SessionFromContext(db.ctx)
 	err := sess.CommitTransaction(db.ctx)
 	if err != nil {
@@ -81,7 +81,7 @@ func (db *MongoDB) CommitTrx() error {
 	return nil
 }
 
-func (db *MongoDB) RollbackTrx() error {
+func (db *MongoDB) RollbackTrx(ctx context.Context) error {
 	sess := mongo.SessionFromContext(db.ctx)
 	err := sess.AbortTransaction(db.ctx)
 	if err != nil {
@@ -286,6 +286,10 @@ func (db *MongoDB) IncrementDistrictOrderId(ctx context.Context, warehouseId int
 	}
 
 	return nil
+}
+
+func (db *MongoDB) CheckNewOrder(ctx context.Context, warehouseId int, districtId int) (*models.NewOrder, *string, error) {
+	return nil, nil, nil
 }
 
 // It also deletes new order, as MongoDB can do that findAndModify is set to 0
