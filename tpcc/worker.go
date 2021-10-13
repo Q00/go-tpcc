@@ -172,7 +172,7 @@ func (w *Worker) DoDelivery(ctx context.Context) error {
 	OCarrierId := helpers.RandInt(MIN_CARRIER_ID, MAX_CARRIER_ID)
 	OlDeliveryD := time.Now()
 
-	return w.ex.DoDelivery(ctx, warehouseId, OCarrierId, OlDeliveryD, w.sc.DistrictsPerWarehouse)
+	return w.ex.DoDeliveryTrx(ctx, warehouseId, OCarrierId, OlDeliveryD, w.sc.DistrictsPerWarehouse)
 }
 
 func (w *Worker) DoOrderStatus(ctx context.Context) error {
@@ -262,7 +262,7 @@ func (w *Worker) DoNewOrder(ctx context.Context) error {
 		iQtys = append(iQtys, helpers.RandInt(1, MAX_OL_QUANTITY))
 	}
 
-	return w.ex.DoNewOrder(ctx, wId, dId, cId, oEntryD, iIds, iWIds, iQtys)
+	return w.ex.DoNewOrderTrx(ctx, wId, dId, cId, oEntryD, iIds, iWIds, iQtys)
 }
 
 func (w *Worker) CreateIndexes() error {
