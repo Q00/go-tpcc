@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"reflect"
 	"strings"
 	"time"
 
@@ -14,19 +15,15 @@ import (
 	"github.com/elastic/go-elasticsearch/v7"
 	"github.com/elastic/go-elasticsearch/v7/esapi"
 	"github.com/elastic/go-elasticsearch/v7/esutil"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type ElasticSearch struct {
 	Client *elasticsearch.Client
-	ctx    context.Context
+	lock   bool
 }
 
 // connect elasticsearch
-func NewElasticSearch(uri string) (*ElasticSearch, error) {
+func NewElasticSearch(uri string, lock bool) (*ElasticSearch, error) {
 	cfg := elasticsearch.Config{
 		Addresses: []string{
 			uri,
@@ -46,7 +43,7 @@ func NewElasticSearch(uri string) (*ElasticSearch, error) {
 
 	return &ElasticSearch{
 		Client: es,
-		ctx:    context.Background(),
+		lock:   lock,
 	}, nil
 }
 
@@ -57,195 +54,71 @@ func (db *ElasticSearch) CreateSchema() error {
 // transaction 은 es에서는 version update 변수로 작동하므로 pass
 
 func (db *ElasticSearch) StartTrx() error {
-	sess := mongo.SessionFromContext(db.ctx)
-	err := sess.StartTransaction()
-	if err != nil {
-		return err
-	}
-
+	// progress in wrapped function
 	return nil
 }
 
-func (db *ElasticSearch) CommitTrx() error {
-	sess := mongo.SessionFromContext(db.ctx)
-	err := sess.CommitTransaction(db.ctx)
-	if err != nil {
-		return err
-	}
-
+func (db *ElasticSearch) CommitTrx(ctx context.Context) error {
 	return nil
 }
 
-func (db *ElasticSearch) RollbackTrx() error {
-	sess := mongo.SessionFromContext(db.ctx)
-	err := sess.AbortTransaction(db.ctx)
-	if err != nil {
-		return err
-	}
-
+func (db *ElasticSearch) RollbackTrx(ctx context.Context) error {
 	return nil
 }
 
 // there is no need about indexing on elasticsearch
 
 func (db *ElasticSearch) CreateIndexes() error {
-	return nil
-}
+	var q map[string]interface{}
+	var dt []map[string]interface{}
+	var ol map[string]interface{}
+	var buf bytes.Buffer
 
-/*
-func (db *ElasticSearch) CreateIndexes() error {
-	ascending := bsonx.Int32(1)
-	descending := bsonx.Int32(-1)
-
-	_, err := db.C.Collection("ITEM").Indexes().CreateMany(context.Background(), []mongo.IndexModel{
-		{
-			Keys: bsonx.Doc{
-				{"W_ID", ascending},
-				{"W_TAX", ascending},
-			},
+	ol = map[string]interface{}{
+		"path_match": "ORDER_LINE",
+		"mapping": map[string]interface{}{
+			"type": "nested",
 		},
-	})
-
-	if err != nil {
-		return err
 	}
 
-	_, err = db.C.Collection("WAREHOUSE").Indexes().CreateMany(context.Background(), []mongo.IndexModel{
-		{
-			Keys: bsonx.Doc{
-				{"I_W_ID", ascending},
-				{"I_ID", ascending},
-			},
-		},
-	})
-
-	if err != nil {
-		return err
+	dt[0] = map[string]interface{}{
+		"ORDER_LINE": ol,
 	}
 
-	_, err = db.C.Collection("DISTRICT").Indexes().CreateMany(context.Background(), []mongo.IndexModel{
-		{
-			Keys: bsonx.Doc{
-				{"D_W_ID", ascending},
-				{"D_ID", ascending},
-				{"D_NEXT_O_ID", ascending},
-				{"D_TAX", ascending},
-			},
-		},
-	})
-
-	if err != nil {
-		return err
+	q = map[string]interface{}{
+		"dynamic":           "false",
+		"dynamic_templates": dt,
+	}
+	if err := json.NewEncoder(&buf).Encode(q); err != nil {
+		log.Fatalf("Error encoding query: %s", err)
 	}
 
-	_, err = db.C.Collection("CUSTOMER").Indexes().CreateMany(context.Background(), []mongo.IndexModel{
-		{
-			Keys: bsonx.Doc{
-				{"C_W_ID", ascending},
-				{"C_D_ID", ascending},
-				{"C_ID", ascending},
-			},
-		},
-		{
-			Keys: bsonx.Doc{
-				{"C_W_ID", ascending},
-				{"C_D_ID", ascending},
-				{"C_LAST", ascending},
-			},
-		},
-	})
+	r := bytes.NewReader(buf.Bytes())
 
-	if err != nil {
-		return err
+	req := esapi.IndicesCreateRequest{
+		Index: "ORDERS",
+		Body:  r,
 	}
 
-	_, err = db.C.Collection("STOCK").Indexes().CreateMany(context.Background(), []mongo.IndexModel{
-		{
-			Keys: bsonx.Doc{
-				{"S_W_ID", ascending},
-				{"S_I_ID", ascending},
-				{"S_QUANTITY", ascending},
-			},
-		},
-		{
-			Keys: bsonx.Doc{
-				{"S_I_ID", ascending},
-			},
-		},
-	})
-
+	res, err := req.Do(context.Background(), db.Client)
 	if err != nil {
-		return err
+		log.Fatalf("Error getting response: %s", err)
 	}
+	defer res.Body.Close()
 
-	_, err = db.C.Collection("ORDERS").Indexes().CreateMany(context.Background(), []mongo.IndexModel{
-		{
-			Keys: bsonx.Doc{
-				{"O_W_ID", ascending},
-				{"O_D_ID", ascending},
-				{"O_ID", ascending},
-				{"O_C_ID", ascending},
-			},
-		},
-		{
-			Keys: bsonx.Doc{
-				{"O_C_ID", ascending},
-				{"O_D_ID", ascending},
-				{"O_W_ID", ascending},
-				{"O_ID", descending},
-				{"O_CARRIER_ID", ascending},
-				{"O_ENTRY_ID", ascending},
-			},
-		},
-	})
-
-	if err != nil {
-		return err
-	}
-
-	_, err = db.C.Collection("NEW_ORDER").Indexes().CreateMany(context.Background(), []mongo.IndexModel{
-		{
-			Keys: bsonx.Doc{
-				{"NO_W_ID", ascending},
-				{"NO_D_ID", ascending},
-				{"NO_O_ID", ascending},
-			},
-		},
-	})
-
-	if err != nil {
-		return err
-	}
-
-	_, err = db.C.Collection("ORDER_LINE").Indexes().CreateMany(context.Background(), []mongo.IndexModel{
-		{
-			Keys: bsonx.Doc{
-				{"OL_O_ID", ascending},
-				{"OL_D_ID", ascending},
-				{"OL_W_ID", ascending},
-				{"OL_NUMBER", ascending},
-			},
-		},
-		{
-			Keys: bsonx.Doc{
-				{"OL_O_ID", ascending},
-				{"OL_D_ID", ascending},
-				{"OL_W_ID", ascending},
-				{"OL_I_ID", descending},
-				{"OL_AMOUNT", ascending},
-			},
-		},
-	})
-
-	if err != nil {
-		return err
+	if res.IsError() {
+		log.Printf("[%s] Error indexing document", res.Status())
+	} else {
+		var r types.ResponseES
+		if errJs := json.NewDecoder(res.Body).Decode(&r); errJs != nil {
+			log.Printf("Error parsing the response body: %s", errJs)
+		}
 	}
 
 	return nil
 }
-*/
 
-func (db *ElasticSearch) InsertOne(tableName string, d interface{}) (err error) {
+func (db *ElasticSearch) InsertOne(ctx context.Context, tableName string, d interface{}) (err error) {
 	// request indexing
 	dataJSON, err := json.Marshal(d)
 	js := string(dataJSON)
@@ -256,7 +129,7 @@ func (db *ElasticSearch) InsertOne(tableName string, d interface{}) (err error) 
 		Refresh: "true",
 	}
 
-	res, err := req.Do(db.ctx, db.Client)
+	res, err := req.Do(ctx, db.Client)
 
 	if err != nil {
 		log.Fatalf("Error getting response: %s", err)
@@ -277,7 +150,7 @@ func (db *ElasticSearch) InsertOne(tableName string, d interface{}) (err error) 
 	return nil
 }
 
-func (db *ElasticSearch) InsertBatch(tableName string, d []interface{}) error {
+func (db *ElasticSearch) InsertBatch(ctx context.Context, tableName string, d []interface{}) error {
 
 	retryOnConflit := new(int)
 	*retryOnConflit = 3
@@ -337,7 +210,7 @@ func (db *ElasticSearch) InsertBatch(tableName string, d []interface{}) error {
 }
 
 // Get District using warehouseId and districtId and return pointer to models.District or error instead.
-func (db *ElasticSearch) IncrementDistrictOrderId(warehouseId int, districtId int) error {
+func (db *ElasticSearch) IncrementDistrictOrderId(ctx context.Context, warehouseId int, districtId int) error {
 	var doc bytes.Buffer
 	documentUp := map[string]interface{}{
 		"scripts": "ctx._source.D_NEXT_O_ID += 1",
@@ -348,12 +221,12 @@ func (db *ElasticSearch) IncrementDistrictOrderId(warehouseId int, districtId in
 	}
 
 	m := types.Must{}
-	m[0] = map[string]interface{}{
-		"D_ID": districtId,
+	m[0] = map[string]map[string]interface{}{
+		"match": {"D_ID": districtId},
 	}
 
-	m[1] = map[string]interface{}{
-		"D_W_ID": warehouseId,
+	m[1] = map[string]map[string]interface{}{
+		"match": {"D_W_ID": warehouseId},
 	}
 
 	var q types.BoolMustQuery
@@ -368,6 +241,9 @@ func (db *ElasticSearch) IncrementDistrictOrderId(warehouseId int, districtId in
 	*refresh = true
 
 	qString, err := json.Marshal(q)
+	if err != nil {
+		return err
+	}
 
 	req := esapi.UpdateByQueryRequest{
 		Index:   indexes[:],
@@ -377,7 +253,7 @@ func (db *ElasticSearch) IncrementDistrictOrderId(warehouseId int, districtId in
 		Query:   string(qString),
 	}
 
-	res, err := req.Do(db.ctx, db.Client)
+	res, err := req.Do(ctx, db.Client)
 	if err != nil {
 		log.Fatalf("Error getting response: %s", err)
 	}
@@ -398,498 +274,739 @@ func (db *ElasticSearch) IncrementDistrictOrderId(warehouseId int, districtId in
 	return nil
 }
 
-// It also deletes new order, as ElasticSearch can do that findAndModify is set to 0
-func (db *ElasticSearch) GetNewOrder(warehouseId int, districtId int) (*models.NewOrder, error) {
+// It also deletes new order, as ElasticSearch can do that lock is set to 0
+func (db *ElasticSearch) CheckNewOrder(ctx context.Context, warehouseId int, districtId int) (*models.NewOrder, *string, error) {
+	m := types.Must{}
+	m[0] = map[string]map[string]interface{}{
+		"match": {"NO_D_ID": districtId},
+	}
+
+	m[1] = map[string]map[string]interface{}{
+		"match": {"NO_W_ID": warehouseId},
+	}
+
+	var q types.BoolMustQuery
+
+	q.Query.Bool.Must = m
+
+	//!TODO: check version
+
+	indexes := [1]string{"NEW_ORDER"}
+
+	qString, err := json.Marshal(q)
+	if err != nil {
+		return nil, nil, err
+	}
 	var NewOrder models.NewOrder
-	var err error
 
-	newOrderProjection := bson.D{
-		{"_id", 0},
-		{"NO_D_ID", 1},
-		{"NO_W_ID", 1},
-		{"NO_O_ID", 1},
+	for {
+		req := esapi.SearchRequest{
+			Index: indexes[:],
+			Query: string(qString),
+		}
+
+		res, err := req.Do(ctx, db.Client)
+		if err != nil {
+			continue
+		}
+
+		var NOID string
+
+		defer res.Body.Close()
+
+		if res.IsError() {
+			continue
+		}
+
+		var r types.SearchResponseESNOrder
+		if errJs := json.NewDecoder(res.Body).Decode(&r); errJs != nil {
+			continue
+		}
+
+		for _, hit := range r.Hits.Hits {
+			log.Printf(" * ID=%s", hit.ID)
+			NewOrder = hit.Source
+			NOID = hit.ID
+			// only one
+			break
+		}
+
+		v := reflect.ValueOf(NewOrder)
+		// check get NEW_ORDER
+		if !v.IsZero() {
+			break
+		}
+
+		return &NewOrder, &NOID, nil
 	}
+	return nil, nil, nil
+}
 
-	filter := bson.D{
-		{"NO_D_ID", districtId},
-		{"NO_W_ID", warehouseId},
-	}
+// It also deletes new order, as ElasticSearch can do that lock is set to 0
+func (db *ElasticSearch) GetNewOrder(ctx context.Context, _ID int, _ int) (*models.NewOrder, error) {
 
-	newOrderSort := bson.D{{"NO_O_ID", 1}}
+	if db.lock {
+		// check new order exist. if not exist, still locked
+		var NewOrder models.NewOrder
+		var NOID string
 
-	if db.findAndModify {
-		err = db.C.Collection("NEW_ORDER").FindOneAndDelete(
-			db.ctx,
-			filter,
-			options.FindOneAndDelete().SetSort(newOrderSort).SetProjection(newOrderProjection),
-		).Decode(&NewOrder)
+		for {
+			var buf bytes.Buffer
+			query := map[string]interface{}{
+				"query": map[string]interface{}{
+					"match": map[string]interface{}{
+						"_id": _ID,
+					},
+				},
+			}
+			if err := json.NewEncoder(&buf).Encode(query); err != nil {
+				log.Fatalf("Error encoding query: %s", err)
+			}
+			indexes := [1]string{"NEW_ORDER"}
 
+			req := esapi.SearchRequest{
+				Index: indexes[:],
+				Query: buf.String(),
+			}
+
+			res, err := req.Do(ctx, db.Client)
+
+			if err != nil {
+				log.Fatalf("Error getting response: %s", err)
+			}
+			defer res.Body.Close()
+
+			if res.IsError() {
+				continue
+			}
+
+			var r types.SearchResponseESNOrder
+			if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
+				log.Fatalf("Error parsing the response body: %s", err)
+				continue
+			}
+
+			for _, hit := range r.Hits.Hits {
+				log.Printf(" * ID=%s", hit.ID)
+				NewOrder = hit.Source
+				NOID = hit.ID
+				break
+			}
+
+			v := reflect.ValueOf(NewOrder)
+			// check get NEW_ORDER
+			if !v.IsZero() {
+				break
+			}
+		}
+
+		// new order lock
+		req := esapi.DeleteRequest{
+			Index:      "NEW_ORDER",
+			DocumentID: string(NOID),
+		}
+
+		// delete
+		_, err := req.Do(ctx, db.Client)
 		if err != nil {
 			return nil, err
 		}
-	} else {
-		err = db.C.Collection("NEW_ORDER").FindOne(
-			db.ctx,
-			filter,
-			options.FindOne().SetProjection(newOrderProjection).SetSort(newOrderSort),
-		).Decode(&NewOrder)
+
+		return &NewOrder, nil
 	}
 
-	return &NewOrder, nil
+	return nil, nil
 }
 
-func (db *ElasticSearch) DeleteNewOrder(orderId int, warehouseId int, districtId int) error {
-	var err error
-
-	filter := bson.D{
-		{"NO_O_ID", orderId},
-		{"NO_D_ID", districtId},
-		{"NO_W_ID", warehouseId},
-	}
-
-	if db.findAndModify {
+func (db *ElasticSearch) DeleteNewOrder(ctx context.Context, orderId int, warehouseId int, districtId int) error {
+	if db.lock {
 		return nil
 	}
-
-	r, err := db.C.Collection("NEW_ORDER").DeleteOne(db.ctx, filter, nil)
-
-	if err != nil {
-		return err
-	}
-
-	if r.DeletedCount == 0 {
-		return fmt.Errorf("no documents found")
-	}
-
 	return nil
 }
 
-func (db *ElasticSearch) GetCustomer(customerId int, warehouseId int, districtId int) (*models.Customer, error) {
-	var err error
+func (db *ElasticSearch) GetCustomer(ctx context.Context, customerId int, warehouseId int, districtId int) (*models.Customer, error) {
+	var customer models.Customer
+	m := types.Must{}
+	m[0] = map[string]map[string]interface{}{
+		"match": {"C_ID": customerId},
+	}
 
-	var c models.Customer
+	m[1] = map[string]map[string]interface{}{
+		"match": {"C_D_ID": districtId},
+	}
 
-	err = db.C.Collection("CUSTOMER").FindOne(db.ctx, bson.D{
-		{"C_ID", customerId},
-		{"C_D_ID", districtId},
-		{"C_W_ID", warehouseId},
-	}).Decode(&c)
+	m[2] = map[string]map[string]interface{}{
+		"match": {"C_W_ID": warehouseId},
+	}
+	var q types.BoolMustQuery
 
+	q.Query.Bool.Must = m
+
+	//!TODO: check version
+
+	indexes := [1]string{"CUSOMTER"}
+
+	qString, err := json.Marshal(q)
 	if err != nil {
 		return nil, err
 	}
 
-	return &c, nil
+	req := esapi.SearchRequest{
+		Index: indexes[:],
+		Query: string(qString),
+	}
+
+	res, err := req.Do(ctx, db.Client)
+
+	if err != nil {
+		log.Fatalf("Error getting response: %s", err)
+	}
+	defer res.Body.Close()
+
+	if res.IsError() {
+		return nil, err
+	}
+
+	var r types.SearchResponseESCustomer
+	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
+		log.Fatalf("Error parsing the response body: %s", err)
+		return nil, err
+	}
+
+	for _, hit := range r.Hits.Hits {
+		log.Printf(" * ID=%s", hit.ID)
+		customer = hit.Source
+		break
+	}
+
+	return &customer, nil
 }
 
 // GetCId
-func (db *ElasticSearch) GetCustomerIdOrder(orderId int, warehouseId int, districtId int) (int, error) {
-	var err error
+func (db *ElasticSearch) GetCustomerIdOrder(ctx context.Context, orderId int, warehouseId int, districtId int) (int, error) {
 
-	filter := bson.D{
-		{"O_ID", orderId},
-		{"O_D_ID", districtId},
-		{"O_W_ID", warehouseId},
+	m := types.Must{}
+	m[0] = map[string]map[string]interface{}{
+		"match": {"O_ID": orderId},
 	}
 
-	var doc bson.M
-	err = db.C.Collection("ORDERS").FindOne(
-		db.ctx,
-		filter,
-		options.FindOne().SetProjection(bson.D{
-			{"_id", 0},
-			{"O_C_ID", 1},
-		})).Decode(&doc)
+	m[1] = map[string]map[string]interface{}{
+		"match": {"O_D_ID": districtId},
+	}
 
+	m[2] = map[string]map[string]interface{}{
+		"match": {"O_W_ID": warehouseId},
+	}
+
+	var q types.BoolMustQuery
+
+	q.Query.Bool.Must = m
+
+	//!TODO: check version
+
+	indexes := [1]string{"ORDERS"}
+
+	qString, err := json.Marshal(q)
 	if err != nil {
 		return 0, err
 	}
+	var CID int
 
-	return int(doc["O_C_ID"].(int32)), nil
-}
-
-func (db *ElasticSearch) UpdateOrders(orderId int, warehouseId int, districtId int, oCarrierId int, deliveryDate time.Time) error {
-	var err error
-
-	filter := bson.D{
-		{"O_ID", orderId},
-		{"O_D_ID", districtId},
-		{"O_W_ID", warehouseId},
+	req := esapi.SearchRequest{
+		Index: indexes[:],
+		Query: string(qString),
 	}
 
-	r, err := db.C.Collection("ORDERS").UpdateOne(db.ctx,
-		filter,
-		bson.D{
-			{"$set", bson.D{
-				{"O_CARRIER_ID", oCarrierId},
-				{"ORDER_LINE.$[].OL_DELIVERY_D", deliveryDate},
-			}},
-		})
+	res, err := req.Do(ctx, db.Client)
 
 	if err != nil {
-		return err
+		log.Fatalf("Error getting response: %s", err)
+	}
+	defer res.Body.Close()
+
+	if res.IsError() {
+		return 0, err
 	}
 
-	if r.MatchedCount == 0 {
-		return fmt.Errorf("UpdateOrders: no documents matched")
+	var r types.SearchResponseESOrder
+	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
+		log.Fatalf("Error parsing the response body: %s", err)
+		return 0, err
 	}
+
+	for _, hit := range r.Hits.Hits {
+		log.Printf(" * ID=%s", hit.ID)
+		CID = hit.Source.O_C_ID
+		break
+	}
+
+	return CID, nil
+
+	// var err error
+
+	// filter := bson.D{
+	// 	{"O_ID", orderId},
+	// 	{"O_D_ID", districtId},
+	// 	{"O_W_ID", warehouseId},
+	// }
+
+	// var doc bson.M
+	// err = db.C.Collection("ORDERS").FindOne(
+	// 	db.ctx,
+	// 	filter,
+	// 	options.FindOne().SetProjection(bson.D{
+	// 		{"_id", 0},
+	// 		{"O_C_ID", 1},
+	// 	})).Decode(&doc)
+
+	// if err != nil {
+	// 	return 0, err
+	// }
+
+	// return int(doc["O_C_ID"].(int32)), nil
+}
+
+func (db *ElasticSearch) UpdateOrders(ctx context.Context, orderId int, warehouseId int, districtId int, oCarrierId int, deliveryDate time.Time) error {
+	// var err error
+
+	// filter := bson.D{
+	// 	{"O_ID", orderId},
+	// 	{"O_D_ID", districtId},
+	// 	{"O_W_ID", warehouseId},
+	// }
+
+	// r, err := db.C.Collection("ORDERS").UpdateOne(db.ctx,
+	// 	filter,
+	// 	bson.D{
+	// 		{"$set", bson.D{
+	// 			{"O_CARRIER_ID", oCarrierId},
+	// 			{"ORDER_LINE.$[].OL_DELIVERY_D", deliveryDate},
+	// 		}},
+	// 	})
+
+	// if err != nil {
+	// 	return err
+	// }
+
+	// if r.MatchedCount == 0 {
+	// 	return fmt.Errorf("UpdateOrders: no documents matched")
+	// }
 
 	return nil
 }
 
-func (db *ElasticSearch) SumOLAmount(orderId int, warehouseId int, districtId int) (float64, error) {
-	var err error
-
-	match := bson.D{
-		{"$match", bson.D{
-			{"O_ID", orderId},
-			{"O_D_ID", districtId},
-			{"O_W_ID", warehouseId},
-		}},
-	}
-
-	unwind := bson.D{
-		{"$unwind", "$ORDER_LINE"},
-	}
-
-	group := bson.D{
-		{"$group", bson.D{
-			{"_id", "OL_O_ID"},
-			{"sumOlAmount", bson.D{
-				{"$sum", "$ORDER_LINE.OL_AMOUNT"},
-			}},
-		}},
-	}
-
-	cursor, err := db.C.Collection("ORDERS").Aggregate(db.ctx, mongo.Pipeline{match, unwind, group})
-	defer cursor.Close(db.ctx)
-	if err != nil {
-		return 0, err
-	}
-
-	cursor.Next(db.ctx)
-
-	var agg bson.M
-	err = cursor.Decode(&agg)
-	if err != nil {
-		return 0, err
-	}
-
-	return float64(agg["sumOlAmount"].(float64)), nil
-
+func (db *ElasticSearch) SumOLAmount(ctx context.Context, orderId int, warehouseId int, districtId int) (float64, error) {
+	// aggreagate orderline of deleted order
+	return 0, nil
 }
 
-func (db *ElasticSearch) UpdateCustomer(customerId int, warehouseId int, districtId int, sumOlTotal float64) error {
-	var err error
+func (db *ElasticSearch) UpdateCustomer(ctx context.Context, customerId int, warehouseId int, districtId int, sumOlTotal float64) error {
+	// var err error
 
-	r, err := db.C.Collection("CUSTOMER").UpdateOne(db.ctx,
-		bson.D{
-			{"C_ID", customerId},
-			{"C_D_ID", districtId},
-			{"C_W_ID", warehouseId},
-		},
-		bson.D{
-			{"$inc", bson.D{
-				{"C_BALANCE", sumOlTotal},
-			}},
-		},
-		nil,
-	)
+	// r, err := db.C.Collection("CUSTOMER").UpdateOne(db.ctx,
+	// 	bson.D{
+	// 		{"C_ID", customerId},
+	// 		{"C_D_ID", districtId},
+	// 		{"C_W_ID", warehouseId},
+	// 	},
+	// 	bson.D{
+	// 		{"$inc", bson.D{
+	// 			{"C_BALANCE", sumOlTotal},
+	// 		}},
+	// 	},
+	// 	nil,
+	// )
 
-	if err != nil {
-		return err
-	}
+	// if err != nil {
+	// 	return err
+	// }
 
-	if r.MatchedCount == 0 {
-		return fmt.Errorf("no matched documents")
-	}
+	// if r.MatchedCount == 0 {
+	// 	return fmt.Errorf("no matched documents")
+	// }
 
 	return nil
 }
 
-func (db *ElasticSearch) GetNextOrderId(warehouseId int, districtId int) (int, error) {
+func (db *ElasticSearch) GetNextOrderId(ctx context.Context, warehouseId int, districtId int) (int, error) {
 
-	var oid bson.M
-	var query = &bson.D{
-		{"D_W_ID", warehouseId},
-		{"D_ID", districtId},
-	}
+	// var oid bson.M
+	// var query = &bson.D{
+	// 	{"D_W_ID", warehouseId},
+	// 	{"D_ID", districtId},
+	// }
 
-	err := db.C.Collection("DISTRICT").FindOne(
-		db.ctx,
-		query,
-		options.FindOne().SetProjection(bson.D{
-			{"_id", 0},
-			{"D_NEXT_O_ID", 1},
-		}).SetComment("STOCK_LEVEL")).Decode(&oid)
+	// err := db.C.Collection("DISTRICT").FindOne(
+	// 	db.ctx,
+	// 	query,
+	// 	options.FindOne().SetProjection(bson.D{
+	// 		{"_id", 0},
+	// 		{"D_NEXT_O_ID", 1},
+	// 	}).SetComment("STOCK_LEVEL")).Decode(&oid)
 
-	if err != nil {
-		return 0, err
-	}
+	// if err != nil {
+	// 	return 0, err
+	// }
 
-	return int(oid["D_NEXT_O_ID"].(int32)), nil
+	// return int(oid["D_NEXT_O_ID"].(int32)), nil
+	return 0, nil
 }
 
-func (db *ElasticSearch) GetStockCount(orderIdLt int, orderIdGt int, threshold int, warehouseId int, districtId int) (int64, error) {
+func (db *ElasticSearch) GetStockCount(ctx context.Context, orderIdLt int, orderIdGt int, threshold int, warehouseId int, districtId int) (int64, error) {
 
-	cursor, err := db.C.Collection("ORDERS").Find(db.ctx,
-		bson.D{
-			{"O_W_ID", warehouseId},
-			{"O_D_ID", districtId},
-			{"O_ID", bson.D{
-				{"$lt", orderIdLt},
-				{"$gte", orderIdGt},
-			}},
-		}, options.Find().SetProjection(bson.D{
-			{"ORDER_LINE.OL_I_ID", 1},
-		}).SetComment("STOCK_LEVEL"))
+	// cursor, err := db.C.Collection("ORDERS").Find(db.ctx,
+	// 	bson.D{
+	// 		{"O_W_ID", warehouseId},
+	// 		{"O_D_ID", districtId},
+	// 		{"O_ID", bson.D{
+	// 			{"$lt", orderIdLt},
+	// 			{"$gte", orderIdGt},
+	// 		}},
+	// 	}, options.Find().SetProjection(bson.D{
+	// 		{"ORDER_LINE.OL_I_ID", 1},
+	// 	}).SetComment("STOCK_LEVEL"))
 
-	if err != nil {
-		return 0, err
-	}
+	// if err != nil {
+	// 	return 0, err
+	// }
 
-	defer cursor.Close(db.ctx)
-	var orderIds []int32
+	// defer cursor.Close(db.ctx)
+	// var orderIds []int32
 
-	for cursor.Next(db.ctx) {
-		var order bson.M
-		if err = cursor.Decode(&order); err != nil {
-			return 0, err
-		}
+	// for cursor.Next(db.ctx) {
+	// 	var order bson.M
+	// 	if err = cursor.Decode(&order); err != nil {
+	// 		return 0, err
+	// 	}
 
-		for _, value := range order["ORDER_LINE"].(primitive.A) {
-			orderIds = append(orderIds, value.(primitive.M)["OL_I_ID"].(int32))
-		}
-	}
+	// 	for _, value := range order["ORDER_LINE"].(primitive.A) {
+	// 		orderIds = append(orderIds, value.(primitive.M)["OL_I_ID"].(int32))
+	// 	}
+	// }
 
-	c, err := db.C.Collection("STOCK").CountDocuments(db.ctx, bson.D{
-		{"S_W_ID", warehouseId},
-		{"S_I_ID", bson.D{
-			{"$in", orderIds},
-		}},
-		{"S_QUANTITY", bson.D{
-			{"$lt", threshold},
-		}},
-	})
+	// c, err := db.C.Collection("STOCK").CountDocuments(db.ctx, bson.D{
+	// 	{"S_W_ID", warehouseId},
+	// 	{"S_I_ID", bson.D{
+	// 		{"$in", orderIds},
+	// 	}},
+	// 	{"S_QUANTITY", bson.D{
+	// 		{"$lt", threshold},
+	// 	}},
+	// })
 
-	if err != nil {
-		return 0, err
-	}
+	// if err != nil {
+	// 	return 0, err
+	// }
 
-	return c, nil
+	// return c, nil
+	return 0, nil
 }
 
-func (db *ElasticSearch) GetCustomerById(customerId int, warehouseId int, districtId int) (*models.Customer, error) {
-
-	var err error
+func (db *ElasticSearch) GetCustomerById(ctx context.Context, customerId int, warehouseId int, districtId int) (*models.Customer, error) {
 	var customer models.Customer
-
-	projection := bson.D{
-		{"_id", 0},
-		{"C_ID", 1},
-		{"C_FIRST", 1},
-		{"C_MIDDLE", 1},
-		{"C_LAST", 1},
-		{"C_BALANCE", 1},
+	m := types.Must{}
+	m[0] = map[string]map[string]interface{}{
+		"match": {"C_ID": customerId},
 	}
 
-	err = db.C.Collection("CUSTOMER").FindOne(db.ctx, bson.D{
-		{"C_W_ID", warehouseId},
-		{"C_D_ID", districtId},
-		{"C_ID", customerId},
-	}, options.FindOne().SetComment("ORDER_STATUS").SetProjection(projection)).Decode(&customer)
+	m[1] = map[string]map[string]interface{}{
+		"match": {"C_D_ID": districtId},
+	}
 
+	m[2] = map[string]map[string]interface{}{
+		"match": {"C_W_ID": warehouseId},
+	}
+
+	var q types.BoolMustQuery
+
+	q.Query.Bool.Must = m
+
+	//!TODO: check version
+
+	indexes := [1]string{"CUSOMTER"}
+
+	qString, err := json.Marshal(q)
 	if err != nil {
 		return nil, err
+	}
+
+	req := esapi.SearchRequest{
+		Index: indexes[:],
+		Query: string(qString),
+	}
+
+	res, err := req.Do(ctx, db.Client)
+
+	if err != nil {
+		log.Fatalf("Error getting response: %s", err)
+	}
+	defer res.Body.Close()
+
+	if res.IsError() {
+		return nil, err
+	}
+
+	var r types.SearchResponseESCustomer
+	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
+		log.Fatalf("Error parsing the response body: %s", err)
+		return nil, err
+	}
+
+	for _, hit := range r.Hits.Hits {
+		log.Printf(" * ID=%s", hit.ID)
+		customer = hit.Source
+		break
 	}
 
 	return &customer, nil
 }
 
-func (db *ElasticSearch) GetCustomerByName(name string, warehouseId int, districtId int) (*models.Customer, error) {
+func (db *ElasticSearch) GetCustomerByName(ctx context.Context, name string, warehouseId int, districtId int) (*models.Customer, error) {
 
 	var customer models.Customer
 
-	projection := bson.D{
-		{"_id", 0},
-		{"C_ID", 1},
-		{"C_FIRST", 1},
-		{"C_MIDDLE", 1},
-		{"C_LAST", 1},
-		{"C_BALANCE", 1},
-	}
+	// projection := bson.D{
+	// 	{"_id", 0},
+	// 	{"C_ID", 1},
+	// 	{"C_FIRST", 1},
+	// 	{"C_MIDDLE", 1},
+	// 	{"C_LAST", 1},
+	// 	{"C_BALANCE", 1},
+	// }
 
-	cursor, err := db.C.Collection("CUSTOMER").Find(db.ctx, bson.D{
-		{"C_W_ID", warehouseId},
-		{"C_D_ID", districtId},
-		{"C_LAST", name},
-	}, options.Find().SetProjection(projection))
+	// cursor, err := db.C.Collection("CUSTOMER").Find(db.ctx, bson.D{
+	// 	{"C_W_ID", warehouseId},
+	// 	{"C_D_ID", districtId},
+	// 	{"C_LAST", name},
+	// }, options.Find().SetProjection(projection))
 
-	defer cursor.Close(db.ctx)
+	// defer cursor.Close(db.ctx)
 
-	if err != nil {
-		return nil, err
-	}
+	// if err != nil {
+	// 	return nil, err
+	// }
 
-	var customers []models.Customer
-	err = cursor.All(db.ctx, &customers)
+	// var customers []models.Customer
+	// err = cursor.All(db.ctx, &customers)
 
-	if err != nil {
-		return nil, err
-	}
-	if len(customers) == 0 {
-		return nil, fmt.Errorf("No customer found")
-	}
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// if len(customers) == 0 {
+	// 	return nil, fmt.Errorf("No customer found")
+	// }
 
-	i_ := int((len(customers) - 1) / 2)
+	// i_ := int((len(customers) - 1) / 2)
 
-	customer = customers[i_]
+	// customer = customers[i_]
 
 	return &customer, nil
 }
 
-func (db *ElasticSearch) GetLastOrder(customerId int, warehouseId int, districtId int) (*models.Order, error) {
-	var err error
+func (db *ElasticSearch) GetLastOrder(ctx context.Context, customerId int, warehouseId int, districtId int) (*models.Order, error) {
+	// var err error
 	var order models.Order
 
-	projection := bson.D{
-		{"O_ID", 1},
-		{"O_CARRIER_ID", 1},
-		{"O_ENTRY_D", 1},
-	}
+	// projection := bson.D{
+	// 	{"O_ID", 1},
+	// 	{"O_CARRIER_ID", 1},
+	// 	{"O_ENTRY_D", 1},
+	// }
 
-	sort := bson.D{{"O_ID", 1}}
+	// sort := bson.D{{"O_ID", 1}}
 
-	err = db.C.Collection("ORDERS").FindOne(db.ctx, bson.D{
-		{"O_W_ID", warehouseId},
-		{"O_D_ID", districtId},
-		{"O_C_ID", customerId},
-	},
-		options.FindOne().SetProjection(projection).SetSort(sort)).Decode(&order)
+	// err = db.C.Collection("ORDERS").FindOne(db.ctx, bson.D{
+	// 	{"O_W_ID", warehouseId},
+	// 	{"O_D_ID", districtId},
+	// 	{"O_C_ID", customerId},
+	// },
+	// 	options.FindOne().SetProjection(projection).SetSort(sort)).Decode(&order)
 
-	if err != nil {
-		return nil, err
-	}
+	// if err != nil {
+	// 	return nil, err
+	// }
 
 	return &order, nil
 }
 
-func (db *ElasticSearch) GetOrderLines(orderId int, warehouseId int, districtId int) (*[]models.OrderLine, error) {
-	var err error
+func (db *ElasticSearch) GetOrderLines(ctx context.Context, orderId int, warehouseId int, districtId int) (*[]models.OrderLine, error) {
+	// var err error
 	var order models.Order
 
-	projection := bson.D{
-		{"ORDER_LINE", 1},
-	}
+	// projection := bson.D{
+	// 	{"ORDER_LINE", 1},
+	// }
 
-	err = db.C.Collection("ORDERS").FindOne(db.ctx, bson.D{
-		{"O_W_ID", warehouseId},
-		{"O_D_ID", districtId},
-		{"O_ID", orderId},
-	},
-		options.FindOne().SetProjection(projection)).Decode(&order)
+	// err = db.C.Collection("ORDERS").FindOne(db.ctx, bson.D{
+	// 	{"O_W_ID", warehouseId},
+	// 	{"O_D_ID", districtId},
+	// 	{"O_ID", orderId},
+	// },
+	// 	options.FindOne().SetProjection(projection)).Decode(&order)
 
-	if err != nil {
-		return nil, err
-	}
+	// if err != nil {
+	// 	return nil, err
+	// }
 
 	return &order.ORDER_LINE, nil
 }
 
-func (db *ElasticSearch) GetWarehouse(warehouseId int) (*models.Warehouse, error) {
+func (db *ElasticSearch) GetWarehouse(ctx context.Context, warehouseId int) (*models.Warehouse, error) {
 
 	var err error
-
-	warehouseProjection := bson.D{
-		{"W_NAME", 1},
-		{"W_STREET_1", 1},
-		{"W_STREET_2", 1},
-		{"W_CITY", 1},
-		{"W_STATE", 1},
-		{"W_ZIP", 1},
-	}
-
 	var warehouse models.Warehouse
 
-	err = db.C.Collection("WAREHOUSE").FindOne(db.ctx, bson.D{
-		{"W_ID", warehouseId},
-	},
-		options.FindOne().SetProjection(warehouseProjection),
-	).Decode(&warehouse)
+	var buf bytes.Buffer
+	query := map[string]interface{}{
+		"query": map[string]interface{}{
+			"match": map[string]interface{}{
+				"W_ID": warehouseId,
+			},
+		},
+	}
+
+	if err := json.NewEncoder(&buf).Encode(query); err != nil {
+		log.Fatalf("Error encoding query: %s", err)
+	}
+	indexes := [1]string{"WAREHOUSE"}
+
+	req := esapi.SearchRequest{
+		Index: indexes[:],
+		Query: buf.String(),
+	}
+
+	res, err := req.Do(ctx, db.Client)
 
 	if err != nil {
+		log.Fatalf("Error getting response: %s", err)
 		return nil, err
+	}
+	defer res.Body.Close()
+
+	if res.IsError() {
+		return nil, err
+	}
+
+	var r types.SearchResponseESWarehouse
+	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
+		log.Fatalf("Error parsing the response body: %s", err)
+		return nil, err
+	}
+
+	for _, hit := range r.Hits.Hits {
+		log.Printf(" * ID=%s", hit.ID)
+		warehouse = hit.Source
+		break
 	}
 
 	return &warehouse, nil
 }
 
-func (db *ElasticSearch) UpdateWarehouseBalance(warehouseId int, amount float64) error {
+func (db *ElasticSearch) UpdateWarehouseBalance(ctx context.Context, warehouseId int, amount float64) error {
 
-	r, err := db.C.Collection("WAREHOUSE").UpdateOne(db.ctx, bson.D{
-		{"W_ID", warehouseId},
-	},
-		bson.D{
-			{"$inc", bson.D{
-				{"W_YTD", amount},
-			}},
-		},
-	)
+	// r, err := db.C.Collection("WAREHOUSE").UpdateOne(db.ctx, bson.D{
+	// 	{"W_ID", warehouseId},
+	// },
+	// 	bson.D{
+	// 		{"$inc", bson.D{
+	// 			{"W_YTD", amount},
+	// 		}},
+	// 	},
+	// )
 
-	if err != nil {
-		return err
-	}
+	// if err != nil {
+	// 	return err
+	// }
 
-	if r.MatchedCount == 0 {
-		return fmt.Errorf("no warehouse found")
-	}
+	// if r.MatchedCount == 0 {
+	// 	return fmt.Errorf("no warehouse found")
+	// }
 
 	return nil
 }
 
-func (db *ElasticSearch) GetDistrict(warehouseId int, districtId int) (*models.District, error) {
-	var err error
+func (db *ElasticSearch) GetDistrict(ctx context.Context, warehouseId int, districtId int) (*models.District, error) {
 
+	var err error
 	var district models.District
 
-	err = db.C.Collection("DISTRICT").FindOne(db.ctx, bson.D{
-		{"D_ID", districtId},
-		{"D_W_ID", warehouseId},
-	}).Decode(&district)
+	m := types.Must{}
+	m[0] = map[string]map[string]interface{}{
+		"match": {"D_ID": district},
+	}
 
+	m[1] = map[string]map[string]interface{}{
+		"match": {"D_W_ID": warehouseId},
+	}
+	var q types.BoolMustQuery
+	q.Query.Bool.Must = m
+
+	indexes := [1]string{"DISTRICT"}
+
+	qString, err := json.Marshal(q)
 	if err != nil {
 		return nil, err
+	}
+
+	req := esapi.SearchRequest{
+		Index: indexes[:],
+		Query: string(qString),
+	}
+
+	res, err := req.Do(ctx, db.Client)
+
+	if err != nil {
+		log.Fatalf("Error getting response: %s", err)
+		return nil, err
+	}
+	defer res.Body.Close()
+
+	if res.IsError() {
+		return nil, err
+	}
+
+	var r types.SearchResponseESDistrict
+	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
+		log.Fatalf("Error parsing the response body: %s", err)
+		return nil, err
+	}
+
+	for _, hit := range r.Hits.Hits {
+		log.Printf(" * ID=%s", hit.ID)
+		district = hit.Source
+		break
 	}
 
 	return &district, nil
 }
 
-func (db *ElasticSearch) UpdateDistrictBalance(warehouseId int, districtId int, amount float64) error {
-	filter := bson.D{
-		{"D_ID", districtId},
-		{"D_W_ID", warehouseId},
-	}
+func (db *ElasticSearch) UpdateDistrictBalance(ctx context.Context, warehouseId int, districtId int, amount float64) error {
+	// filter := bson.D{
+	// 	{"D_ID", districtId},
+	// 	{"D_W_ID", warehouseId},
+	// }
 
-	update := bson.D{
-		{"$inc", bson.D{
-			{"D_YTD", amount},
-		}},
-	}
+	// update := bson.D{
+	// 	{"$inc", bson.D{
+	// 		{"D_YTD", amount},
+	// 	}},
+	// }
 
-	r, err := db.C.Collection("DISTRICT").UpdateOne(db.ctx, filter, update, nil)
+	// r, err := db.C.Collection("DISTRICT").UpdateOne(db.ctx, filter, update, nil)
 
-	if r.MatchedCount == 0 {
-		return fmt.Errorf("No district found")
-	}
+	// if r.MatchedCount == 0 {
+	// 	return fmt.Errorf("No district found")
+	// }
 
-	if err != nil {
-		return err
-	}
+	// if err != nil {
+	// 	return err
+	// }
 
 	return nil
 }
 
-func (db *ElasticSearch) InsertHistory(
+func (db *ElasticSearch) InsertHistory(ctx context.Context,
 	warehouseId int,
 	districtId int,
 	date time.Time,
@@ -897,52 +1014,53 @@ func (db *ElasticSearch) InsertHistory(
 	data string,
 ) error {
 
-	_, err := db.C.Collection("HISTORY").InsertOne(db.ctx, bson.D{
-		{"H_D_ID", districtId},
-		{"H_W_ID", warehouseId},
-		{"H_C_W_ID", warehouseId},
-		{"H_C_D_ID", districtId},
-		{"H_DATE", date},
-		{"H_AMOUNT", amount},
-		{"H_DATA", date},
-	})
+	// _, err := db.C.Collection("HISTORY").InsertOne(db.ctx, bson.D{
+	// 	{"H_D_ID", districtId},
+	// 	{"H_W_ID", warehouseId},
+	// 	{"H_C_W_ID", warehouseId},
+	// 	{"H_C_D_ID", districtId},
+	// 	{"H_DATE", date},
+	// 	{"H_AMOUNT", amount},
+	// 	{"H_DATA", date},
+	// })
 
-	return err
+	// return err
+	return nil
 }
 
-func (db *ElasticSearch) UpdateCredit(customerId int, warehouseId int, districtId int, balance float64, data string) error {
+func (db *ElasticSearch) UpdateCredit(ctx context.Context, customerId int, warehouseId int, districtId int, balance float64, data string) error {
 	//updateBCCustomer
-	var err error
-	update := bson.D{
-		{"$inc", bson.D{
-			{"C_BALANCE", -1 * balance},
-			{"C_YTD_PAYMENT", balance},
-			{"C_PAYMENT_CNT", 1},
-		}},
-	}
+	// var err error
+	// update := bson.D{
+	// 	{"$inc", bson.D{
+	// 		{"C_BALANCE", -1 * balance},
+	// 		{"C_YTD_PAYMENT", balance},
+	// 		{"C_PAYMENT_CNT", 1},
+	// 	}},
+	// }
 
-	if len(data) > 0 {
-		update = append(update, bson.E{"$set", bson.D{
-			{"C_DATA", data},
-		}})
-	}
+	// if len(data) > 0 {
+	// 	update = append(update, bson.E{"$set", bson.D{
+	// 		{"C_DATA", data},
+	// 	}})
+	// }
 
-	_, err = db.C.Collection("CUSTOMER").UpdateOne(db.ctx,
-		bson.D{
-			{"C_ID", customerId},
-			{"C_W_ID", warehouseId},
-			{"C_D_ID", districtId},
-		},
-		update, nil)
+	// _, err = db.C.Collection("CUSTOMER").UpdateOne(db.ctx,
+	// 	bson.D{
+	// 		{"C_ID", customerId},
+	// 		{"C_W_ID", warehouseId},
+	// 		{"C_D_ID", districtId},
+	// 	},
+	// 	update, nil)
 
-	if err != nil {
-		return err
-	}
+	// if err != nil {
+	// 	return err
+	// }
 
 	return nil
 }
 
-func (db *ElasticSearch) CreateOrder(
+func (db *ElasticSearch) CreateOrder(ctx context.Context,
 	orderId int,
 	customerId int,
 	warehouseId int,
@@ -966,18 +1084,19 @@ func (db *ElasticSearch) CreateOrder(
 		ORDER_LINE:   orderLine,
 	}
 
-	_, err := db.C.Collection("NEW_ORDER").InsertOne(db.ctx,
-		bson.D{
-			{"NO_O_ID", orderId},
-			{"NO_D_ID", districtId},
-			{"NO_W_ID", warehouseId},
-		})
+	no := models.NewOrder{
+		NO_O_ID: orderId,
+		NO_D_ID: districtId,
+		NO_W_ID: warehouseId,
+	}
+
+	err := db.InsertOne(ctx, "NEW_ORDER", no)
 
 	if err != nil {
 		return err
 	}
 
-	_, err = db.C.Collection("ORDERS").InsertOne(db.ctx, order)
+	err = db.InsertOne(ctx, "ORDERS", order)
 
 	if err != nil {
 		return nil
@@ -987,113 +1106,220 @@ func (db *ElasticSearch) CreateOrder(
 }
 
 //todo: sharding
-func (db *ElasticSearch) GetItems(itemIds []int) (*[]models.Item, error) {
-
-	cursor, err := db.C.Collection("ITEM").Find(db.ctx, bson.D{
-		{"I_ID", bson.D{
-			{"$in", itemIds},
-		}}},
-		options.Find().SetProjection(bson.D{
-			{"_id", 0},
-			{"I_ID", 1},
-			{"I_PRICE", 1},
-			{"I_NAME", 1},
-			{"I_DATA", 1},
-		}),
-	)
-
-	if err != nil {
-		return nil, err
-	}
+func (db *ElasticSearch) GetItems(ctx context.Context, itemIds []int) (*[]models.Item, error) {
 
 	var items []models.Item
-	err = cursor.All(db.ctx, &items)
+	var t types.Terms
+	t[0] = map[string]map[string][]int{"terms": {"I_ID": itemIds}}
 
+	var q types.TermsQuery
+	q.Query.Bool.Terms = t
+
+	indexes := [1]string{"ITEM"}
+
+	qString, err := json.Marshal(q)
 	if err != nil {
 		return nil, err
 	}
 
+	req := esapi.SearchRequest{
+		Index: indexes[:],
+		Query: string(qString),
+	}
+
+	res, err := req.Do(ctx, db.Client)
+
+	if err != nil {
+		log.Fatalf("Error getting response: %s", err)
+	}
+	defer res.Body.Close()
+
+	if res.IsError() {
+		return nil, err
+	}
+
+	var r types.SearchResponseESItem
+	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
+		log.Fatalf("Error parsing the response body: %s", err)
+		return nil, err
+	}
+
+	for _, hit := range r.Hits.Hits {
+		log.Printf(" * ID=%s", hit.ID)
+		items = append(items, hit.Source)
+	}
 	return &items, nil
 }
 
-func (db *ElasticSearch) GetStockInfo(districtId int, iIds []int, iWids []int, allLocal int) (*[]models.Stock, error) {
-	var err error
+func (db *ElasticSearch) GetStockInfo(ctx context.Context, districtId int, iIds []int, iWids []int, allLocal int) (*[]models.Stock, error) {
 	distCol := fmt.Sprintf("S_DIST_%02d", districtId)
-	stockProjection := bson.D{
-		{"_id", 0},
-		{"S_I_ID", 1},
-		{"S_W_ID", 1},
-		{"S_QUANTITY", 1},
-		{"S_DATA", 1},
-		{"S_YTD", 1},
-		{"S_ORDER_CNT", 1},
-		{"S_REMOTE_CNT", 1},
-		{distCol, 1},
-	}
+	indexes := [1]string{"STOCK"}
 
-	var cursor *mongo.Cursor
-	if allLocal == 1 {
-		cursor, err = db.C.Collection("STOCK").Find(db.ctx, bson.D{
-			{"S_I_ID", bson.D{
-				{"$in", iIds},
-			}},
-			{"S_W_ID", iWids[0]},
-		})
+	stockProjection := [8]string{"S_I_ID", "S_W_ID", "S_QUANTITY", "S_DATA", "S_YTD", "S_ORDER_CNT", "S_REMOTE_CNT", distCol}
 
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		var searchList []bson.D
-		for item, value := range iIds {
-			searchList = append(searchList, bson.D{
-				{"S_I_ID", value},
-				{"S_W_ID", iWids[item]},
-			})
-		}
-
-		cursor, err = db.C.Collection("STOCK").Find(db.ctx,
-			bson.D{
-				{"$or", searchList},
-			}, options.Find().SetProjection(stockProjection))
-
-		if err != nil {
-			return nil, err
-		}
-	}
+	// stockProjection := bson.D{
+	// 	{"_id", 0},
+	// 	{"S_I_ID", 1},
+	// 	{"S_W_ID", 1},
+	// 	{"S_QUANTITY", 1},
+	// 	{"S_DATA", 1},
+	// 	{"S_YTD", 1},
+	// 	{"S_ORDER_CNT", 1},
+	// 	{"S_REMOTE_CNT", 1},
+	// 	{distCol, 1},
+	// }
 
 	var stocks []models.Stock
+	// var cursor *mongo.Cursor
+	if allLocal == 1 {
+		var t types.Terms
+		t[0] = map[string]map[string][]int{"terms": {"S_I_ID": iIds}}
+		t[1] = map[string]map[string]int{"terms": {"S_W_ID": iWids[0]}}
 
-	err = cursor.All(db.ctx, &stocks)
-	if err != nil {
-		return nil, err
+		var q types.TermsQuery
+		q.Query.Bool.Terms = t
+
+		qString, err := json.Marshal(q)
+		if err != nil {
+			return nil, err
+		}
+
+		req := esapi.SearchRequest{
+			Source: stockProjection[:],
+			Index:  indexes[:],
+			Query:  string(qString),
+		}
+
+		res, err := req.Do(ctx, db.Client)
+
+		if err != nil {
+			log.Fatalf("Error getting response: %s", err)
+		}
+		defer res.Body.Close()
+
+		if res.IsError() {
+			return nil, err
+		}
+
+		var r types.SearchResponseESStock
+		if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
+			log.Fatalf("Error parsing the response body: %s", err)
+			return nil, err
+		}
+
+		for _, hit := range r.Hits.Hits {
+			log.Printf(" * ID=%s", hit.ID)
+			stocks = append(stocks, hit.Source)
+		}
+	} else {
+		var searchList []types.Terms
+		for item, value := range iIds {
+			var t types.Terms
+			t[0] = map[string]map[string]int{"terms": {"S_I_ID": value}}
+			t[1] = map[string]map[string]int{"terms": {"S_W_ID": iWids[item]}}
+			searchList = append(searchList, t)
+		}
+
+		var o types.ORQuery
+		qString, err := json.Marshal(o)
+		if err != nil {
+			return nil, err
+		}
+
+		o.Query.Bool.Filter.Bool.Terms = searchList
+
+		req := esapi.SearchRequest{
+			Source: stockProjection[:],
+			Index:  indexes[:],
+			Query:  string(qString),
+		}
+
+		res, err := req.Do(ctx, db.Client)
+
+		if err != nil {
+			log.Fatalf("Error getting response: %s", err)
+		}
+		defer res.Body.Close()
+
+		if res.IsError() {
+			return nil, err
+		}
+
+		var r types.SearchResponseESStock
+		if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
+			log.Fatalf("Error parsing the response body: %s", err)
+			return nil, err
+		}
+
+		for _, hit := range r.Hits.Hits {
+			log.Printf(" * ID=%s", hit.ID)
+			stocks = append(stocks, hit.Source)
+		}
 	}
 
 	return &stocks, nil
 }
 
-func (db *ElasticSearch) UpdateStock(stockId int, warehouseId int, quantity int, ytd int, ordercnt int, remotecnt int) error {
-	ru, err := db.C.Collection("STOCK").UpdateOne(db.ctx,
-		bson.D{
-			{"S_I_ID", stockId},
-			{"S_W_ID", warehouseId},
-		},
-		bson.D{
-			{"$set", bson.D{
-				{"S_QUANTITY", quantity},
-				{"S_YTD", ytd},
-				{"S_ORDER_CNT", ordercnt},
-				{"S_REMOTE_CNT", remotecnt},
-			}},
-		},
-	)
+func (db *ElasticSearch) UpdateStock(ctx context.Context, stockId int, warehouseId int, quantity int, ytd int, ordercnt int, remotecnt int) error {
+	var doc bytes.Buffer
+	s := fmt.Sprintf("ctx._source.S_QUANTITY=%d;ctx._source.S_YTD=%d;ctx._source.S_ORDER_CNT=%d;ctx._source.S_REMOTE_CNT=%d;", quantity, ytd, ordercnt, remotecnt)
+	documentUp := map[string]interface{}{
+		"scripts": s,
+	}
 
+	if err := json.NewEncoder(&doc).Encode(documentUp); err != nil {
+		log.Fatalf("Error encoding query: %s", err)
+	}
+
+	m := types.Must{}
+	m[0] = map[string]map[string]interface{}{
+		"match": {"S_I_ID": stockId},
+	}
+
+	m[1] = map[string]map[string]interface{}{
+		"match": {"S_W_ID": warehouseId},
+	}
+
+	var q types.BoolMustQuery
+
+	q.Query.Bool.Must = m
+
+	//!TODO: check version
+
+	indexes := [1]string{"STOCK"}
+
+	refresh := new(bool)
+	*refresh = true
+
+	qString, err := json.Marshal(q)
 	if err != nil {
 		return err
 	}
 
-	if ru.MatchedCount == 0 {
-		return fmt.Errorf("0 document matched")
+	req := esapi.UpdateByQueryRequest{
+		Index:   indexes[:],
+		Body:    &doc,
+		Refresh: refresh,
+		Pretty:  true,
+		Query:   string(qString),
+	}
+
+	res, err := req.Do(ctx, db.Client)
+	if err != nil {
+		log.Fatalf("Error getting response: %s", err)
+	}
+
+	defer res.Body.Close()
+
+	if res.IsError() {
+		log.Printf("[%s] Error delete document", res.Status())
+	} else {
+		var r map[string]interface{}
+		if errJs := json.NewDecoder(res.Body).Decode(&r); errJs != nil {
+			log.Printf("Error parsing the response body: %s", errJs)
+		} else {
+			log.Printf("[%s] %s; version=%d", res.Status(), r["result"], int(r["_version"].(float64)))
+		}
 	}
 
 	return nil
