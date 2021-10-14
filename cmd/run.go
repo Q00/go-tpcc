@@ -130,7 +130,7 @@ func stats(cancel context.CancelFunc, c chan tpcc.Transaction, wg *sync.WaitGrou
 	latencies := make(map[tpcc.TransactionType][]float64)
 
 	if output == CSVOutput {
-		fmt.Println("Time,TPS,StockLevel,StockLevelLatency,Delivery,DeliveryLatency,OrderStatus,OrderStatusLatency,Payment,PaymentLatency,NewOrder,NewOrderLatency,Failed")
+		fmt.Println("Time,TPS,StockLevel,StockLevelLatency,TPMC,Delivery,DeliveryLatency,OrderStatus,OrderStatusLatency,Payment,PaymentLatency,NewOrder,NewOrderLatency,Failed")
 	}
 
 	for {
@@ -140,7 +140,6 @@ func stats(cancel context.CancelFunc, c chan tpcc.Transaction, wg *sync.WaitGrou
 			time.Sleep(1 * time.Second)
 			return
 		case v := <-c:
-
 			_, exist := globalStats[v.ThreadId]
 
 			if !exist {
@@ -210,9 +209,9 @@ func stats(cancel context.CancelFunc, c chan tpcc.Transaction, wg *sync.WaitGrou
 			var format string
 			switch output {
 			case CSVOutput:
-				format = "%d,%.2f,%d,%.2f,%d,%.2f,%d,%.2f,%d,%.2f,%d,%.2f,%d\n"
+				format = "%d,%.2f,%d,%.2f,%.2f,%d,%.2f,%d,%.2f,%d,%.2f,%d,%.2f,%d\n"
 			case JSONOutput:
-				format = "{\"time\": %d, \"tps\": %.2f, \"StockLevel\": { \"Trx\": %d, \"LatencyPercentile\": %.2f}, " +
+				format = "{\"time\": %d, \"tps\": %.2f, \"StockLevel\": { \"Trx\": %d, \"LatencyPercentile\": %.2f}, \"tpmc\": %.2f " +
 					"\"Delivery\": { \"Trx\": %d, \"LatencyPercentile\": %.2f}, " +
 					"\"OrderStatus\": { \"Trx\": %d, \"LatencyPercentile\":%.2f}, " +
 					"\"Payment\": { \"Trx\": %d, \"LatencyPercentile\": %.2f}, " +
@@ -228,6 +227,7 @@ func stats(cancel context.CancelFunc, c chan tpcc.Transaction, wg *sync.WaitGrou
 				float64(sCnt+dCnt+oCnt+pCnt+nCnt)/float64(ri),
 				sCnt,
 				float64(perc(latencies[tpcc.StockLevelTrx], percentile)),
+				float64(nCnt*60)/float64(i),
 				dCnt,
 				float64(perc(latencies[tpcc.DeliveryTrx], percentile)),
 				oCnt,
