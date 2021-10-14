@@ -3,20 +3,11 @@ package executor
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/Percona-Lab/go-tpcc/databases"
 	"github.com/Percona-Lab/go-tpcc/tpcc/models"
 )
-
-type Values struct {
-	m map[string]string
-}
-
-func (v Values) Get(key string) string {
-	return v.m[key]
-}
 
 type Executor struct {
 	batchSize   int
@@ -103,6 +94,8 @@ func (e *Executor) DoTrxRetries(ctx context.Context, dId int, fn func(ctx contex
 		ctx2, err := fn(ctx)
 
 		if err != nil {
+			fmt.Println(err)
+
 			if e.transaction {
 				e := e.db.RollbackTrx(ctx2)
 				if e != nil {
@@ -145,7 +138,7 @@ func (e *Executor) DoDeliveryTrx(ctx context.Context, wId int, oCarrierId int, o
 		err := e.DoTrxRetries(ctx, i, func(ctx context.Context) (context.Context, error) {
 			ctx2, err := e.DoDelivery(ctx, wId, oCarrierId, olDeliveryD, i)
 			if err != nil {
-				panic(err)
+				return ctx2, err
 			}
 
 			return ctx2, nil
@@ -164,24 +157,23 @@ func (e *Executor) DoDeliveryTrx(ctx context.Context, wId int, oCarrierId int, o
 func (e *Executor) DoDelivery(ctx context.Context, wId int, oCarrierId int, olDeliveryD time.Time, dId int) (context.Context, error) {
 
 	// save new order for Rollback
-	co, ID, err := e.db.CheckNewOrder(ctx, wId, dId)
+	co, _ID, err := e.db.CheckNewOrder(ctx, wId, dId)
 	// not exist only elasticsearch
 	if err != nil {
 		return nil, err
 	}
-
 	var ctrx context.Context
 	//exist
 	if co != nil {
-		ctrx := context.WithValue(ctx, "co"+string(rune(co.NO_O_ID)), co)
+		ctrx := context.WithValue(ctx, "co", co)
 
-		_ID, err := strconv.Atoi(*ID)
 		if err != nil {
 			return ctrx, err
 		}
+		ctrx2 := context.WithValue(ctx, "ID", *_ID)
 
 		// find by logical id (delete)
-		no, err := e.db.GetNewOrder(ctx, _ID, dId)
+		no, err := e.db.GetNewOrder(ctrx2, wId, dId)
 		if err != nil {
 			return ctrx, err
 		}
@@ -219,7 +211,6 @@ func (e *Executor) DoDelivery(ctx context.Context, wId int, oCarrierId int, olDe
 	} else {
 		no, err := e.db.GetNewOrder(ctx, wId, dId)
 		if err != nil {
-			fmt.Println("WID=", wId, " DID=", dId)
 			return ctrx, err
 		}
 
@@ -395,7 +386,7 @@ func (e *Executor) DoNewOrderTrx(ctx context.Context, wId, dId, cId int, oEntryD
 		err := e.DoTrxRetries(ctx, i, func(ctx context.Context) (context.Context, error) {
 			ctx2, err := e.DoNewOrder(ctx, wId, dId, cId, oEntryD, iIds, iWids, iQtys)
 			if err != nil {
-				panic(err)
+				return ctx2, nil
 			}
 
 			return ctx2, nil
