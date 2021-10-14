@@ -57,7 +57,7 @@ func NewDatabase(driver, uri, dbname, username, password string, transactions bo
 		d, err = mysql.NewMySQL(uri, dbname, transactions)
 	case "postgresql":
 		d, err = postgresql.NewPostgreSQL(uri, dbname, transactions)
-	case "elasticSearch":
+	case "elasticsearch":
 		d, err = elasticsearch.NewElasticSearch(uri, findandmodify)
 	default:
 		panic("Unknown database driver")
@@ -68,4 +68,12 @@ func NewDatabase(driver, uri, dbname, username, password string, transactions bo
 	}
 
 	return d, nil
+}
+
+type Values struct {
+	M map[string]string
+}
+
+func (v Values) Get(key string) string {
+	return v.M[key]
 }
