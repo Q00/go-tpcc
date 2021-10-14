@@ -47,14 +47,15 @@ func NewWorker(configuration *Configuration, wg *sync.WaitGroup, c chan Transact
 	)
 
 	den := false
-	if configuration.DBDriver == "mongodb" {
+	if configuration.DBDriver == "mongodb" || configuration.DBDriver == "elasticsearch" {
 		den = true
 	}
 
-	d, err := databases.NewDatabase(configuration.DBDriver, configuration.URI, configuration.DBName, "a", "b", configuration.Transactions, false)
+	d, err := databases.NewDatabase(configuration.DBDriver, configuration.URI, configuration.DBName, "a", "b", configuration.Transactions, true)
 	if err != nil {
 		return nil, err
 	}
+
 	ex, err := executor.NewExecutor(d, 256)
 	if err != nil {
 		return nil, err
@@ -130,18 +131,18 @@ func (w *Worker) Execute(ctx context.Context) {
 				ThreadId: w.threadId,
 			}
 			switch r := helpers.RandInt(1, 100); {
-			case r <= 4:
-				trx.Type = StockLevelTrx
-				status = w.DoStockLevelTrx(ctx)
-			case r <= 8:
+			// case r <= 4:
+			// 	trx.Type = StockLevelTrx
+			// 	status = w.DoStockLevelTrx(ctx)
+			case r <= 50:
 				trx.Type = DeliveryTrx
 				status = w.DoDelivery(ctx)
-			case r <= 12:
-				trx.Type = OrderStatusTrx
-				status = w.DoOrderStatus(ctx)
-			case r <= 55:
-				trx.Type = PaymentTrx
-				status = w.DoPayment(ctx)
+			// case r <= 12:
+			// 	trx.Type = OrderStatusTrx
+			// 	status = w.DoOrderStatus(ctx)
+			// case r <= 55:
+			// 	trx.Type = PaymentTrx
+			// 	status = w.DoPayment(ctx)
 			default:
 				trx.Type = NewOrderTrx
 				status = w.DoNewOrder(ctx)
