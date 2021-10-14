@@ -11,6 +11,7 @@ import (
 	"time"
 
 	types "github.com/Percona-Lab/go-tpcc/databases/elasticsearch/models"
+	"github.com/Percona-Lab/go-tpcc/helpers"
 	"github.com/Percona-Lab/go-tpcc/tpcc/models"
 	"github.com/elastic/go-elasticsearch/v7"
 	"github.com/elastic/go-elasticsearch/v7/esapi"
@@ -70,20 +71,20 @@ func (db *ElasticSearch) RollbackTrx(ctx context.Context) error {
 
 func (db *ElasticSearch) CreateIndexes() error {
 	var q map[string]interface{}
-	var dt []map[string]interface{}
 	var ol map[string]interface{}
 	var buf bytes.Buffer
 
 	ol = map[string]interface{}{
-		"path_match": "ORDER_LINE",
+		"path_match": "order_line",
 		"mapping": map[string]interface{}{
 			"type": "nested",
 		},
 	}
 
-	dt[0] = map[string]interface{}{
-		"ORDER_LINE": ol,
-	}
+	dt := []map[string]interface{}{}
+	dt = append(dt, map[string]interface{}{
+		"order_line": ol,
+	})
 
 	q = map[string]interface{}{
 		"dynamic":           "false",
@@ -94,9 +95,9 @@ func (db *ElasticSearch) CreateIndexes() error {
 	}
 
 	r := bytes.NewReader(buf.Bytes())
-
-	req := esapi.IndicesCreateRequest{
-		Index: "ORDERS",
+	indexes := [1]string{"orders"}
+	req := esapi.IndicesPutMappingRequest{
+		Index: indexes[:],
 		Body:  r,
 	}
 
@@ -124,7 +125,7 @@ func (db *ElasticSearch) InsertOne(ctx context.Context, tableName string, d inte
 	js := string(dataJSON)
 
 	req := esapi.IndexRequest{
-		Index:   tableName,
+		Index:   strings.ToLower(tableName),
 		Body:    strings.NewReader(js),
 		Refresh: "true",
 	}
@@ -142,8 +143,6 @@ func (db *ElasticSearch) InsertOne(ctx context.Context, tableName string, d inte
 		var r types.ResponseES
 		if errJs := json.NewDecoder(res.Body).Decode(&r); errJs != nil {
 			log.Printf("Error parsing the response body: %s", errJs)
-		} else {
-			log.Printf("[%s] version=%d ID=%s Index=%s", res.Status(), r.Version, r.ID, r.Index)
 		}
 	}
 
@@ -157,7 +156,7 @@ func (db *ElasticSearch) InsertBatch(ctx context.Context, tableName string, d []
 
 	// request indexing
 	indexer, _ := esutil.NewBulkIndexer(esutil.BulkIndexerConfig{
-		Index:  tableName,
+		Index:  strings.ToLower(tableName),
 		Client: db.Client,
 	})
 
@@ -213,34 +212,52 @@ func (db *ElasticSearch) InsertBatch(ctx context.Context, tableName string, d []
 func (db *ElasticSearch) IncrementDistrictOrderId(ctx context.Context, warehouseId int, districtId int) error {
 	var doc bytes.Buffer
 	documentUp := map[string]interface{}{
-		"scripts": "ctx._source.D_NEXT_O_ID += 1",
+		"script": "ctx._source.D_NEXT_O_ID += 1",
 	}
 
 	if err := json.NewEncoder(&doc).Encode(documentUp); err != nil {
 		log.Fatalf("Error encoding query: %s", err)
 	}
 
-	m := types.Must{}
-	m[0] = map[string]map[string]interface{}{
-		"match": {"D_ID": districtId},
+	// m := types.Must{}
+
+	// m = append(m, map[string]map[string]interface{}{
+	// 	"match": {"D_ID": districtId},
+	// })
+	// m = append(m, map[string]map[string]interface{}{
+	// 	"match": {"D_W_ID": warehouseId},
+	// })
+
+	query := map[string]interface{}{
+		"query": map[string]interface{}{
+			"bool": map[string]interface{}{
+				"filter": []map[string]interface{}{
+					0: {
+						"match": map[string]interface{}{
+							"D_ID": districtId,
+						},
+					},
+					1: {
+						"match": map[string]interface{}{
+							"D_W_ID": warehouseId,
+						},
+					},
+				},
+			},
+		},
 	}
 
-	m[1] = map[string]map[string]interface{}{
-		"match": {"D_W_ID": warehouseId},
-	}
+	// var q types.BoolMustQuery
 
-	var q types.BoolMustQuery
-
-	q.Query.Bool.Must = m
+	// q.Query.Bool.Must = m
 
 	//!TODO: check version
 
-	indexes := [1]string{"DISTRICT"}
+	indexes := [1]string{"district"}
 
 	refresh := new(bool)
 	*refresh = true
-
-	qString, err := json.Marshal(q)
+	qString, err := json.Marshal(query)
 	if err != nil {
 		return err
 	}
@@ -250,7 +267,7 @@ func (db *ElasticSearch) IncrementDistrictOrderId(ctx context.Context, warehouse
 		Body:    &doc,
 		Refresh: refresh,
 		Pretty:  true,
-		Query:   string(qString),
+		Query:   helpers.ReplaceSp(string(qString)),
 	}
 
 	res, err := req.Do(ctx, db.Client)
@@ -261,13 +278,11 @@ func (db *ElasticSearch) IncrementDistrictOrderId(ctx context.Context, warehouse
 	defer res.Body.Close()
 
 	if res.IsError() {
-		log.Printf("[%s] Error delete document", res.Status())
+		log.Printf("[%s] Error update document", res.String())
 	} else {
 		var r map[string]interface{}
 		if errJs := json.NewDecoder(res.Body).Decode(&r); errJs != nil {
 			log.Printf("Error parsing the response body: %s", errJs)
-		} else {
-			log.Printf("[%s] %s; version=%d", res.Status(), r["result"], int(r["_version"].(float64)))
 		}
 	}
 
@@ -277,13 +292,12 @@ func (db *ElasticSearch) IncrementDistrictOrderId(ctx context.Context, warehouse
 // It also deletes new order, as ElasticSearch can do that lock is set to 0
 func (db *ElasticSearch) CheckNewOrder(ctx context.Context, warehouseId int, districtId int) (*models.NewOrder, *string, error) {
 	m := types.Must{}
-	m[0] = map[string]map[string]interface{}{
+	m = append(m, map[string]map[string]interface{}{
 		"match": {"NO_D_ID": districtId},
-	}
-
-	m[1] = map[string]map[string]interface{}{
+	})
+	m = append(m, map[string]map[string]interface{}{
 		"match": {"NO_W_ID": warehouseId},
-	}
+	})
 
 	var q types.BoolMustQuery
 
@@ -291,26 +305,29 @@ func (db *ElasticSearch) CheckNewOrder(ctx context.Context, warehouseId int, dis
 
 	//!TODO: check version
 
-	indexes := [1]string{"NEW_ORDER"}
+	indexes := [1]string{"new_order"}
 
 	qString, err := json.Marshal(q)
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(qString); err != nil {
+		log.Fatalf("Error encoding query: %s", err)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
 	var NewOrder models.NewOrder
-
+	var NOID string
 	for {
 		req := esapi.SearchRequest{
 			Index: indexes[:],
-			Query: string(qString),
+			// Query: helpers.ReplaceSp(string(qString)),
+			Body: &buf,
 		}
 
 		res, err := req.Do(ctx, db.Client)
 		if err != nil {
 			continue
 		}
-
-		var NOID string
 
 		defer res.Body.Close()
 
@@ -320,11 +337,12 @@ func (db *ElasticSearch) CheckNewOrder(ctx context.Context, warehouseId int, dis
 
 		var r types.SearchResponseESNOrder
 		if errJs := json.NewDecoder(res.Body).Decode(&r); errJs != nil {
+			fmt.Println(errJs)
 			continue
 		}
 
 		for _, hit := range r.Hits.Hits {
-			log.Printf(" * ID=%s", hit.ID)
+			// log.Printf(" * ID=%s", hit.ID)
 			NewOrder = hit.Source
 			NOID = hit.ID
 			// only one
@@ -332,41 +350,42 @@ func (db *ElasticSearch) CheckNewOrder(ctx context.Context, warehouseId int, dis
 		}
 
 		v := reflect.ValueOf(NewOrder)
-		// check get NEW_ORDER
+		// check get new_order
 		if !v.IsZero() {
 			break
 		}
 
 		return &NewOrder, &NOID, nil
 	}
-	return nil, nil, nil
+	return &NewOrder, &NOID, nil
 }
 
 // It also deletes new order, as ElasticSearch can do that lock is set to 0
-func (db *ElasticSearch) GetNewOrder(ctx context.Context, _ID int, _ int) (*models.NewOrder, error) {
+func (db *ElasticSearch) GetNewOrder(ctx context.Context, _ int, _ int) (*models.NewOrder, error) {
 
 	if db.lock {
 		// check new order exist. if not exist, still locked
 		var NewOrder models.NewOrder
 		var NOID string
 
+		ID := ctx.Value("ID")
 		for {
 			var buf bytes.Buffer
 			query := map[string]interface{}{
 				"query": map[string]interface{}{
-					"match": map[string]interface{}{
-						"_id": _ID,
+					"ids": map[string]interface{}{
+						"values": [1]string{ID.(string)},
 					},
 				},
 			}
 			if err := json.NewEncoder(&buf).Encode(query); err != nil {
 				log.Fatalf("Error encoding query: %s", err)
 			}
-			indexes := [1]string{"NEW_ORDER"}
+			indexes := [1]string{"new_order"}
 
 			req := esapi.SearchRequest{
 				Index: indexes[:],
-				Query: buf.String(),
+				Body:  &buf,
 			}
 
 			res, err := req.Do(ctx, db.Client)
@@ -387,14 +406,14 @@ func (db *ElasticSearch) GetNewOrder(ctx context.Context, _ID int, _ int) (*mode
 			}
 
 			for _, hit := range r.Hits.Hits {
-				log.Printf(" * ID=%s", hit.ID)
+				// log.Printf(" * ID=%s", hit.ID)
 				NewOrder = hit.Source
 				NOID = hit.ID
 				break
 			}
 
 			v := reflect.ValueOf(NewOrder)
-			// check get NEW_ORDER
+			// check get new_order
 			if !v.IsZero() {
 				break
 			}
@@ -402,7 +421,7 @@ func (db *ElasticSearch) GetNewOrder(ctx context.Context, _ID int, _ int) (*mode
 
 		// new order lock
 		req := esapi.DeleteRequest{
-			Index:      "NEW_ORDER",
+			Index:      "new_order",
 			DocumentID: string(NOID),
 		}
 
@@ -428,24 +447,23 @@ func (db *ElasticSearch) DeleteNewOrder(ctx context.Context, orderId int, wareho
 func (db *ElasticSearch) GetCustomer(ctx context.Context, customerId int, warehouseId int, districtId int) (*models.Customer, error) {
 	var customer models.Customer
 	m := types.Must{}
-	m[0] = map[string]map[string]interface{}{
+	m = append(m, map[string]map[string]interface{}{
 		"match": {"C_ID": customerId},
-	}
-
-	m[1] = map[string]map[string]interface{}{
+	})
+	m = append(m, map[string]map[string]interface{}{
 		"match": {"C_D_ID": districtId},
-	}
-
-	m[2] = map[string]map[string]interface{}{
+	})
+	m = append(m, map[string]map[string]interface{}{
 		"match": {"C_W_ID": warehouseId},
-	}
+	})
+
 	var q types.BoolMustQuery
 
 	q.Query.Bool.Must = m
 
 	//!TODO: check version
 
-	indexes := [1]string{"CUSOMTER"}
+	indexes := [1]string{"customer"}
 
 	qString, err := json.Marshal(q)
 	if err != nil {
@@ -454,7 +472,7 @@ func (db *ElasticSearch) GetCustomer(ctx context.Context, customerId int, wareho
 
 	req := esapi.SearchRequest{
 		Index: indexes[:],
-		Query: string(qString),
+		Query: helpers.ReplaceSp(string(qString)),
 	}
 
 	res, err := req.Do(ctx, db.Client)
@@ -475,7 +493,7 @@ func (db *ElasticSearch) GetCustomer(ctx context.Context, customerId int, wareho
 	}
 
 	for _, hit := range r.Hits.Hits {
-		log.Printf(" * ID=%s", hit.ID)
+		// log.Printf(" * ID=%s", hit.ID)
 		customer = hit.Source
 		break
 	}
@@ -487,17 +505,15 @@ func (db *ElasticSearch) GetCustomer(ctx context.Context, customerId int, wareho
 func (db *ElasticSearch) GetCustomerIdOrder(ctx context.Context, orderId int, warehouseId int, districtId int) (int, error) {
 
 	m := types.Must{}
-	m[0] = map[string]map[string]interface{}{
+	m = append(m, map[string]map[string]interface{}{
 		"match": {"O_ID": orderId},
-	}
-
-	m[1] = map[string]map[string]interface{}{
+	})
+	m = append(m, map[string]map[string]interface{}{
 		"match": {"O_D_ID": districtId},
-	}
-
-	m[2] = map[string]map[string]interface{}{
+	})
+	m = append(m, map[string]map[string]interface{}{
 		"match": {"O_W_ID": warehouseId},
-	}
+	})
 
 	var q types.BoolMustQuery
 
@@ -505,7 +521,7 @@ func (db *ElasticSearch) GetCustomerIdOrder(ctx context.Context, orderId int, wa
 
 	//!TODO: check version
 
-	indexes := [1]string{"ORDERS"}
+	indexes := [1]string{"orders"}
 
 	qString, err := json.Marshal(q)
 	if err != nil {
@@ -515,7 +531,7 @@ func (db *ElasticSearch) GetCustomerIdOrder(ctx context.Context, orderId int, wa
 
 	req := esapi.SearchRequest{
 		Index: indexes[:],
-		Query: string(qString),
+		Query: helpers.ReplaceSp(string(qString)),
 	}
 
 	res, err := req.Do(ctx, db.Client)
@@ -536,7 +552,7 @@ func (db *ElasticSearch) GetCustomerIdOrder(ctx context.Context, orderId int, wa
 	}
 
 	for _, hit := range r.Hits.Hits {
-		log.Printf(" * ID=%s", hit.ID)
+		// log.Printf(" * ID=%s", hit.ID)
 		CID = hit.Source.O_C_ID
 		break
 	}
@@ -552,7 +568,7 @@ func (db *ElasticSearch) GetCustomerIdOrder(ctx context.Context, orderId int, wa
 	// }
 
 	// var doc bson.M
-	// err = db.C.Collection("ORDERS").FindOne(
+	// err = db.C.Collection("orders").FindOne(
 	// 	db.ctx,
 	// 	filter,
 	// 	options.FindOne().SetProjection(bson.D{
@@ -576,12 +592,12 @@ func (db *ElasticSearch) UpdateOrders(ctx context.Context, orderId int, warehous
 	// 	{"O_W_ID", warehouseId},
 	// }
 
-	// r, err := db.C.Collection("ORDERS").UpdateOne(db.ctx,
+	// r, err := db.C.Collection("orders").UpdateOne(db.ctx,
 	// 	filter,
 	// 	bson.D{
 	// 		{"$set", bson.D{
 	// 			{"O_CARRIER_ID", oCarrierId},
-	// 			{"ORDER_LINE.$[].OL_DELIVERY_D", deliveryDate},
+	// 			{"order_line.$[].OL_DELIVERY_D", deliveryDate},
 	// 		}},
 	// 	})
 
@@ -590,7 +606,7 @@ func (db *ElasticSearch) UpdateOrders(ctx context.Context, orderId int, warehous
 	// }
 
 	// if r.MatchedCount == 0 {
-	// 	return fmt.Errorf("UpdateOrders: no documents matched")
+	// 	return fmt.Errorf("Updateorders: no documents matched")
 	// }
 
 	return nil
@@ -637,13 +653,13 @@ func (db *ElasticSearch) GetNextOrderId(ctx context.Context, warehouseId int, di
 	// 	{"D_ID", districtId},
 	// }
 
-	// err := db.C.Collection("DISTRICT").FindOne(
+	// err := db.C.Collection("district").FindOne(
 	// 	db.ctx,
 	// 	query,
 	// 	options.FindOne().SetProjection(bson.D{
 	// 		{"_id", 0},
 	// 		{"D_NEXT_O_ID", 1},
-	// 	}).SetComment("STOCK_LEVEL")).Decode(&oid)
+	// 	}).SetComment("stock_LEVEL")).Decode(&oid)
 
 	// if err != nil {
 	// 	return 0, err
@@ -655,7 +671,7 @@ func (db *ElasticSearch) GetNextOrderId(ctx context.Context, warehouseId int, di
 
 func (db *ElasticSearch) GetStockCount(ctx context.Context, orderIdLt int, orderIdGt int, threshold int, warehouseId int, districtId int) (int64, error) {
 
-	// cursor, err := db.C.Collection("ORDERS").Find(db.ctx,
+	// cursor, err := db.C.Collection("orders").Find(db.ctx,
 	// 	bson.D{
 	// 		{"O_W_ID", warehouseId},
 	// 		{"O_D_ID", districtId},
@@ -664,8 +680,8 @@ func (db *ElasticSearch) GetStockCount(ctx context.Context, orderIdLt int, order
 	// 			{"$gte", orderIdGt},
 	// 		}},
 	// 	}, options.Find().SetProjection(bson.D{
-	// 		{"ORDER_LINE.OL_I_ID", 1},
-	// 	}).SetComment("STOCK_LEVEL"))
+	// 		{"order_line.OL_I_ID", 1},
+	// 	}).SetComment("stock_LEVEL"))
 
 	// if err != nil {
 	// 	return 0, err
@@ -680,12 +696,12 @@ func (db *ElasticSearch) GetStockCount(ctx context.Context, orderIdLt int, order
 	// 		return 0, err
 	// 	}
 
-	// 	for _, value := range order["ORDER_LINE"].(primitive.A) {
+	// 	for _, value := range order["order_line"].(primitive.A) {
 	// 		orderIds = append(orderIds, value.(primitive.M)["OL_I_ID"].(int32))
 	// 	}
 	// }
 
-	// c, err := db.C.Collection("STOCK").CountDocuments(db.ctx, bson.D{
+	// c, err := db.C.Collection("stock").CountDocuments(db.ctx, bson.D{
 	// 	{"S_W_ID", warehouseId},
 	// 	{"S_I_ID", bson.D{
 	// 		{"$in", orderIds},
@@ -706,25 +722,23 @@ func (db *ElasticSearch) GetStockCount(ctx context.Context, orderIdLt int, order
 func (db *ElasticSearch) GetCustomerById(ctx context.Context, customerId int, warehouseId int, districtId int) (*models.Customer, error) {
 	var customer models.Customer
 	m := types.Must{}
-	m[0] = map[string]map[string]interface{}{
+
+	m = append(m, map[string]map[string]interface{}{
 		"match": {"C_ID": customerId},
-	}
-
-	m[1] = map[string]map[string]interface{}{
+	})
+	m = append(m, map[string]map[string]interface{}{
 		"match": {"C_D_ID": districtId},
-	}
-
-	m[2] = map[string]map[string]interface{}{
+	})
+	m = append(m, map[string]map[string]interface{}{
 		"match": {"C_W_ID": warehouseId},
-	}
-
+	})
 	var q types.BoolMustQuery
 
 	q.Query.Bool.Must = m
 
 	//!TODO: check version
 
-	indexes := [1]string{"CUSOMTER"}
+	indexes := [1]string{"customer"}
 
 	qString, err := json.Marshal(q)
 	if err != nil {
@@ -733,7 +747,7 @@ func (db *ElasticSearch) GetCustomerById(ctx context.Context, customerId int, wa
 
 	req := esapi.SearchRequest{
 		Index: indexes[:],
-		Query: string(qString),
+		Query: helpers.ReplaceSp(string(qString)),
 	}
 
 	res, err := req.Do(ctx, db.Client)
@@ -754,7 +768,7 @@ func (db *ElasticSearch) GetCustomerById(ctx context.Context, customerId int, wa
 	}
 
 	for _, hit := range r.Hits.Hits {
-		log.Printf(" * ID=%s", hit.ID)
+		// log.Printf(" * ID=%s", hit.ID)
 		customer = hit.Source
 		break
 	}
@@ -816,7 +830,7 @@ func (db *ElasticSearch) GetLastOrder(ctx context.Context, customerId int, wareh
 
 	// sort := bson.D{{"O_ID", 1}}
 
-	// err = db.C.Collection("ORDERS").FindOne(db.ctx, bson.D{
+	// err = db.C.Collection("orders").FindOne(db.ctx, bson.D{
 	// 	{"O_W_ID", warehouseId},
 	// 	{"O_D_ID", districtId},
 	// 	{"O_C_ID", customerId},
@@ -835,10 +849,10 @@ func (db *ElasticSearch) GetOrderLines(ctx context.Context, orderId int, warehou
 	var order models.Order
 
 	// projection := bson.D{
-	// 	{"ORDER_LINE", 1},
+	// 	{"order_line", 1},
 	// }
 
-	// err = db.C.Collection("ORDERS").FindOne(db.ctx, bson.D{
+	// err = db.C.Collection("orders").FindOne(db.ctx, bson.D{
 	// 	{"O_W_ID", warehouseId},
 	// 	{"O_D_ID", districtId},
 	// 	{"O_ID", orderId},
@@ -869,11 +883,11 @@ func (db *ElasticSearch) GetWarehouse(ctx context.Context, warehouseId int) (*mo
 	if err := json.NewEncoder(&buf).Encode(query); err != nil {
 		log.Fatalf("Error encoding query: %s", err)
 	}
-	indexes := [1]string{"WAREHOUSE"}
+	indexes := [1]string{"warehouse"}
 
 	req := esapi.SearchRequest{
 		Index: indexes[:],
-		Query: buf.String(),
+		Query: helpers.ReplaceSp(buf.String()),
 	}
 
 	res, err := req.Do(ctx, db.Client)
@@ -895,7 +909,7 @@ func (db *ElasticSearch) GetWarehouse(ctx context.Context, warehouseId int) (*mo
 	}
 
 	for _, hit := range r.Hits.Hits {
-		log.Printf(" * ID=%s", hit.ID)
+		// log.Printf(" * ID=%s", hit.ID)
 		warehouse = hit.Source
 		break
 	}
@@ -905,7 +919,7 @@ func (db *ElasticSearch) GetWarehouse(ctx context.Context, warehouseId int) (*mo
 
 func (db *ElasticSearch) UpdateWarehouseBalance(ctx context.Context, warehouseId int, amount float64) error {
 
-	// r, err := db.C.Collection("WAREHOUSE").UpdateOne(db.ctx, bson.D{
+	// r, err := db.C.Collection("warehouse").UpdateOne(db.ctx, bson.D{
 	// 	{"W_ID", warehouseId},
 	// },
 	// 	bson.D{
@@ -932,17 +946,18 @@ func (db *ElasticSearch) GetDistrict(ctx context.Context, warehouseId int, distr
 	var district models.District
 
 	m := types.Must{}
-	m[0] = map[string]map[string]interface{}{
+	m = append(m, map[string]map[string]interface{}{
 		"match": {"D_ID": district},
-	}
+	})
 
-	m[1] = map[string]map[string]interface{}{
+	m = append(m, map[string]map[string]interface{}{
 		"match": {"D_W_ID": warehouseId},
-	}
+	})
+
 	var q types.BoolMustQuery
 	q.Query.Bool.Must = m
 
-	indexes := [1]string{"DISTRICT"}
+	indexes := [1]string{"district"}
 
 	qString, err := json.Marshal(q)
 	if err != nil {
@@ -951,7 +966,7 @@ func (db *ElasticSearch) GetDistrict(ctx context.Context, warehouseId int, distr
 
 	req := esapi.SearchRequest{
 		Index: indexes[:],
-		Query: string(qString),
+		Query: helpers.ReplaceSp(string(qString)),
 	}
 
 	res, err := req.Do(ctx, db.Client)
@@ -973,7 +988,7 @@ func (db *ElasticSearch) GetDistrict(ctx context.Context, warehouseId int, distr
 	}
 
 	for _, hit := range r.Hits.Hits {
-		log.Printf(" * ID=%s", hit.ID)
+		// log.Printf(" * ID=%s", hit.ID)
 		district = hit.Source
 		break
 	}
@@ -993,7 +1008,7 @@ func (db *ElasticSearch) UpdateDistrictBalance(ctx context.Context, warehouseId 
 	// 	}},
 	// }
 
-	// r, err := db.C.Collection("DISTRICT").UpdateOne(db.ctx, filter, update, nil)
+	// r, err := db.C.Collection("district").UpdateOne(db.ctx, filter, update, nil)
 
 	// if r.MatchedCount == 0 {
 	// 	return fmt.Errorf("No district found")
@@ -1090,13 +1105,13 @@ func (db *ElasticSearch) CreateOrder(ctx context.Context,
 		NO_W_ID: warehouseId,
 	}
 
-	err := db.InsertOne(ctx, "NEW_ORDER", no)
+	err := db.InsertOne(ctx, "new_order", no)
 
 	if err != nil {
 		return err
 	}
 
-	err = db.InsertOne(ctx, "ORDERS", order)
+	err = db.InsertOne(ctx, "orders", order)
 
 	if err != nil {
 		return nil
@@ -1110,12 +1125,12 @@ func (db *ElasticSearch) GetItems(ctx context.Context, itemIds []int) (*[]models
 
 	var items []models.Item
 	var t types.Terms
-	t[0] = map[string]map[string][]int{"terms": {"I_ID": itemIds}}
+	t = append(t, map[string]map[string][]int{"terms": {"I_ID": itemIds}})
 
 	var q types.TermsQuery
 	q.Query.Bool.Terms = t
 
-	indexes := [1]string{"ITEM"}
+	indexes := [1]string{"item"}
 
 	qString, err := json.Marshal(q)
 	if err != nil {
@@ -1124,7 +1139,7 @@ func (db *ElasticSearch) GetItems(ctx context.Context, itemIds []int) (*[]models
 
 	req := esapi.SearchRequest{
 		Index: indexes[:],
-		Query: string(qString),
+		Query: helpers.ReplaceSp(string(qString)),
 	}
 
 	res, err := req.Do(ctx, db.Client)
@@ -1145,7 +1160,7 @@ func (db *ElasticSearch) GetItems(ctx context.Context, itemIds []int) (*[]models
 	}
 
 	for _, hit := range r.Hits.Hits {
-		log.Printf(" * ID=%s", hit.ID)
+		// log.Printf(" * ID=%s", hit.ID)
 		items = append(items, hit.Source)
 	}
 	return &items, nil
@@ -1153,7 +1168,7 @@ func (db *ElasticSearch) GetItems(ctx context.Context, itemIds []int) (*[]models
 
 func (db *ElasticSearch) GetStockInfo(ctx context.Context, districtId int, iIds []int, iWids []int, allLocal int) (*[]models.Stock, error) {
 	distCol := fmt.Sprintf("S_DIST_%02d", districtId)
-	indexes := [1]string{"STOCK"}
+	indexes := [1]string{"stock"}
 
 	stockProjection := [8]string{"S_I_ID", "S_W_ID", "S_QUANTITY", "S_DATA", "S_YTD", "S_ORDER_CNT", "S_REMOTE_CNT", distCol}
 
@@ -1173,8 +1188,8 @@ func (db *ElasticSearch) GetStockInfo(ctx context.Context, districtId int, iIds 
 	// var cursor *mongo.Cursor
 	if allLocal == 1 {
 		var t types.Terms
-		t[0] = map[string]map[string][]int{"terms": {"S_I_ID": iIds}}
-		t[1] = map[string]map[string]int{"terms": {"S_W_ID": iWids[0]}}
+		t = append(t, map[string]map[string][]int{"terms": {"S_I_ID": iIds}})
+		t = append(t, map[string]map[string]int{"term": {"S_W_ID": iWids[0]}})
 
 		var q types.TermsQuery
 		q.Query.Bool.Terms = t
@@ -1187,7 +1202,7 @@ func (db *ElasticSearch) GetStockInfo(ctx context.Context, districtId int, iIds 
 		req := esapi.SearchRequest{
 			Source: stockProjection[:],
 			Index:  indexes[:],
-			Query:  string(qString),
+			Query:  helpers.ReplaceSp(string(qString)),
 		}
 
 		res, err := req.Do(ctx, db.Client)
@@ -1208,15 +1223,15 @@ func (db *ElasticSearch) GetStockInfo(ctx context.Context, districtId int, iIds 
 		}
 
 		for _, hit := range r.Hits.Hits {
-			log.Printf(" * ID=%s", hit.ID)
+			// log.Printf(" * ID=%s", hit.ID)
 			stocks = append(stocks, hit.Source)
 		}
 	} else {
 		var searchList []types.Terms
 		for item, value := range iIds {
 			var t types.Terms
-			t[0] = map[string]map[string]int{"terms": {"S_I_ID": value}}
-			t[1] = map[string]map[string]int{"terms": {"S_W_ID": iWids[item]}}
+			t = append(t, map[string]map[string]int{"terms": {"S_I_ID": value}})
+			t = append(t, map[string]map[string]int{"terms": {"S_W_ID": iWids[item]}})
 			searchList = append(searchList, t)
 		}
 
@@ -1231,7 +1246,7 @@ func (db *ElasticSearch) GetStockInfo(ctx context.Context, districtId int, iIds 
 		req := esapi.SearchRequest{
 			Source: stockProjection[:],
 			Index:  indexes[:],
-			Query:  string(qString),
+			Query:  helpers.ReplaceSp(string(qString)),
 		}
 
 		res, err := req.Do(ctx, db.Client)
@@ -1252,7 +1267,7 @@ func (db *ElasticSearch) GetStockInfo(ctx context.Context, districtId int, iIds 
 		}
 
 		for _, hit := range r.Hits.Hits {
-			log.Printf(" * ID=%s", hit.ID)
+			// log.Printf(" * ID=%s", hit.ID)
 			stocks = append(stocks, hit.Source)
 		}
 	}
@@ -1264,7 +1279,7 @@ func (db *ElasticSearch) UpdateStock(ctx context.Context, stockId int, warehouse
 	var doc bytes.Buffer
 	s := fmt.Sprintf("ctx._source.S_QUANTITY=%d;ctx._source.S_YTD=%d;ctx._source.S_ORDER_CNT=%d;ctx._source.S_REMOTE_CNT=%d;", quantity, ytd, ordercnt, remotecnt)
 	documentUp := map[string]interface{}{
-		"scripts": s,
+		"script": s,
 	}
 
 	if err := json.NewEncoder(&doc).Encode(documentUp); err != nil {
@@ -1272,13 +1287,12 @@ func (db *ElasticSearch) UpdateStock(ctx context.Context, stockId int, warehouse
 	}
 
 	m := types.Must{}
-	m[0] = map[string]map[string]interface{}{
+	m = append(m, map[string]map[string]interface{}{
 		"match": {"S_I_ID": stockId},
-	}
-
-	m[1] = map[string]map[string]interface{}{
+	})
+	m = append(m, map[string]map[string]interface{}{
 		"match": {"S_W_ID": warehouseId},
-	}
+	})
 
 	var q types.BoolMustQuery
 
@@ -1286,7 +1300,7 @@ func (db *ElasticSearch) UpdateStock(ctx context.Context, stockId int, warehouse
 
 	//!TODO: check version
 
-	indexes := [1]string{"STOCK"}
+	indexes := [1]string{"stock"}
 
 	refresh := new(bool)
 	*refresh = true
@@ -1301,7 +1315,7 @@ func (db *ElasticSearch) UpdateStock(ctx context.Context, stockId int, warehouse
 		Body:    &doc,
 		Refresh: refresh,
 		Pretty:  true,
-		Query:   string(qString),
+		Query:   helpers.ReplaceSp(string(qString)),
 	}
 
 	res, err := req.Do(ctx, db.Client)
