@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"strings"
 	"time"
 
@@ -1113,28 +1114,32 @@ func (db *ElasticSearch) GetItems(ctx context.Context, itemIds []int) (*[]models
 	var q types.TermsQuery
 	q.Query.Bool.Terms = t
 
-	indexes := [1]string{"item"}
-
 	qString, err := json.Marshal(q)
 	if err != nil {
 		return nil, err
 	}
 
-	req := esapi.SearchRequest{
-		Index: indexes[:],
-		Query: helpers.ReplaceSp(string(qString)),
+	// req := esapi.SearchRequest{
+	// 	Index: indexes[:],
+	// 	Query: helpers.ReplaceSp(string(qString)),
+	// }
+
+	// reader := strings.NewReader(helpers.ReplaceSp(string(qString)))
+	reader := strings.NewReader(string(qString))
+	// fmt.Println(helpers.ReplaceSp(string(qString)))
+
+	request, err := http.NewRequest("GET", "http://localhost:9200/item/_search", reader)
+	if err != nil {
+		log.Fatalf("Error getting response: %s", err)
 	}
-
-	res, err := req.Do(ctx, db.Client)
-
+	request.Header.Set("Content-Type", "application/json")
+	// res, err := req.Do(ctx, db.Client)
+	client := &http.Client{}
+	res, err := client.Do(request)
 	if err != nil {
 		log.Fatalf("Error getting response: %s", err)
 	}
 	defer res.Body.Close()
-
-	if res.IsError() {
-		return nil, err
-	}
 
 	var r types.SearchResponseESItem
 	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
@@ -1146,7 +1151,22 @@ func (db *ElasticSearch) GetItems(ctx context.Context, itemIds []int) (*[]models
 		// log.Printf(" * ID=%s", hit.ID)
 		items = append(items, hit.Source)
 	}
+
+	items = unique(items)
+
 	return &items, nil
+}
+
+func unique(items []models.Item) []models.Item {
+	keys := make(map[int]bool)
+	list := []models.Item{}
+	for _, entry := range items {
+		if _, value := keys[entry.I_ID]; !value {
+			keys[entry.I_ID] = true
+			list = append(list, entry)
+		}
+	}
+	return list
 }
 
 func (db *ElasticSearch) GetStockInfo(ctx context.Context, districtId int, iIds []int, iWids []int, allLocal int) (*[]models.Stock, error) {

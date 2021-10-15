@@ -90,12 +90,10 @@ func (e *Executor) DoTrxRetries(ctx context.Context, dId int, fn func(ctx contex
 				return err
 			}
 		}
-
-		ctx2, err := fn(ctx)
+		ctx2 := context.Background()
+		ctx2, err = fn(ctx)
 
 		if err != nil {
-			fmt.Println(err)
-
 			if e.transaction {
 				e := e.db.RollbackTrx(ctx2)
 				if e != nil {
@@ -134,22 +132,19 @@ func (e *Executor) DoStockLevelTrx(ctx context.Context, warehouseId int, distric
 }
 
 func (e *Executor) DoDeliveryTrx(ctx context.Context, wId int, oCarrierId int, olDeliveryD time.Time, dId int) error {
+	var err error
 	for i := 1; i <= dId; i++ {
-		err := e.DoTrxRetries(ctx, i, func(ctx context.Context) (context.Context, error) {
+		err = e.DoTrxRetries(ctx, i, func(ctx context.Context) (context.Context, error) {
 			ctx2, err := e.DoDelivery(ctx, wId, oCarrierId, olDeliveryD, i)
 			if err != nil {
 				return ctx2, err
 			}
 
-			return ctx2, nil
+			return ctx2, err
 
 		})
-
-		if err != nil {
-			return err
-		}
 	}
-	return nil
+	return err
 }
 
 //todo the order of arguments here is weird
@@ -327,22 +322,19 @@ func (e *Executor) DoPayment(
 }
 
 func (e *Executor) DoNewOrderTrx(ctx context.Context, wId, dId, cId int, oEntryD time.Time, iIds []int, iWids []int, iQtys []int) error {
+	var err error
 	for i := 1; i <= dId; i++ {
-		err := e.DoTrxRetries(ctx, i, func(ctx context.Context) (context.Context, error) {
+		err = e.DoTrxRetries(ctx, i, func(ctx context.Context) (context.Context, error) {
 			ctx2, err := e.DoNewOrder(ctx, wId, dId, cId, oEntryD, iIds, iWids, iQtys)
 			if err != nil {
-				return ctx2, nil
+				return ctx2, err
 			}
 
-			return ctx2, nil
+			return ctx2, err
 
 		})
-
-		if err != nil {
-			return err
-		}
 	}
-	return nil
+	return err
 }
 
 func (e *Executor) DoNewOrder(ctx context.Context, wId, dId, cId int, oEntryD time.Time, iIds []int, iWids []int, iQtys []int) (context.Context, error) {
@@ -379,7 +371,6 @@ func (e *Executor) DoNewOrder(ctx context.Context, wId, dId, cId int, oEntryD ti
 	if err != nil {
 		return ctx, err
 	}
-
 	if len(*items) != len(iIds) {
 		return ctx, fmt.Errorf("TPCC defines 1%% of neworder gives a wrong itemid, causing rollback. This happens on purpose")
 	}
@@ -390,7 +381,7 @@ func (e *Executor) DoNewOrder(ctx context.Context, wId, dId, cId int, oEntryD ti
 	}
 
 	if len(*stocks) != len(iIds) {
-		return ctx, fmt.Errorf("len(stocks) != len(i_ids)")
+		return ctx, err
 	}
 
 	var orderLines []models.OrderLine
@@ -403,26 +394,25 @@ func (e *Executor) DoNewOrder(ctx context.Context, wId, dId, cId int, oEntryD ti
 		} else {
 			sQuantity += 91 - iQtys[0]
 		}
-		
-		S_REMOTE_CNT := (*stocks)[i].S_REMOTE_CNT
 
 		S_REMOTE_CNT := (*stocks)[i].S_REMOTE_CNT
 
 		if iWids[i] != wId {
 			S_REMOTE_CNT += 1
 		}
-		
+
 		err = e.db.UpdateStock(
-				(*stocks)[i].S_I_ID,
-				iWids[1],
-				sQuantity,
-				(*stocks)[i].S_YTD + iQtys[i],
-				(*stocks)[i].S_ORDER_CNT + 1,
-				S_REMOTE_CNT,
-			)
+			ctx,
+			(*stocks)[i].S_I_ID,
+			iWids[1],
+			sQuantity,
+			(*stocks)[i].S_YTD+iQtys[i],
+			(*stocks)[i].S_ORDER_CNT+1,
+			S_REMOTE_CNT,
+		)
 
 		if err != nil {
-			return err
+			return ctx, err
 		}
 
 		orderLines = append(orderLines, models.OrderLine{
