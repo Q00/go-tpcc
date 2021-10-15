@@ -317,47 +317,38 @@ func (db *ElasticSearch) CheckNewOrder(ctx context.Context, warehouseId int, dis
 	}
 	var NewOrder models.NewOrder
 	var NOID string
-	for {
-		req := esapi.SearchRequest{
-			Index: indexes[:],
-			// Query: helpers.ReplaceSp(string(qString)),
-			Body: &buf,
-		}
-
-		res, err := req.Do(ctx, db.Client)
-		if err != nil {
-			continue
-		}
-
-		defer res.Body.Close()
-
-		if res.IsError() {
-			continue
-		}
-
-		var r types.SearchResponseESNOrder
-		if errJs := json.NewDecoder(res.Body).Decode(&r); errJs != nil {
-			fmt.Println(errJs)
-			continue
-		}
-
-		for _, hit := range r.Hits.Hits {
-			// log.Printf(" * ID=%s", hit.ID)
-			NewOrder = hit.Source
-			NOID = hit.ID
-			// only one
-			break
-		}
-
-		v := reflect.ValueOf(NewOrder)
-		// check get new_order
-		if !v.IsZero() {
-			break
-		}
-
-		return &NewOrder, &NOID, nil
+	req := esapi.SearchRequest{
+		Index: indexes[:],
+		// Query: helpers.ReplaceSp(string(qString)),
+		Body: &buf,
 	}
+
+	res, err := req.Do(ctx, db.Client)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	defer res.Body.Close()
+
+	if res.IsError() {
+		return nil, nil, err
+	}
+
+	var r types.SearchResponseESNOrder
+	if errJs := json.NewDecoder(res.Body).Decode(&r); errJs != nil {
+		return nil, nil, err
+	}
+
+	for _, hit := range r.Hits.Hits {
+		// log.Printf(" * ID=%s", hit.ID)
+		NewOrder = hit.Source
+		NOID = hit.ID
+		// only one
+		break
+	}
+
 	return &NewOrder, &NOID, nil
+
 }
 
 // It also deletes new order, as ElasticSearch can do that lock is set to 0
