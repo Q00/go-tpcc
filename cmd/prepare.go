@@ -3,15 +3,22 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/Percona-Lab/go-tpcc/tpcc"
 	"github.com/spf13/cobra"
 )
 
+func timeMeasurement(start time.Time) {
+	elapsed := time.Since(start)
+	fmt.Printf("Execution time: %s", elapsed)
+}
+
 var prepareCmd = &cobra.Command{
 	Use:   "prepare",
 	Short: "Prepare the TPC-C dataset",
 	Run: func(cmd *cobra.Command, args []string) {
+		defer timeMeasurement(time.Now())
 
 		warehouses, _ := cmd.PersistentFlags().GetInt("warehouses")
 		threads, _ := cmd.PersistentFlags().GetInt("threads")
