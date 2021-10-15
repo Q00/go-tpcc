@@ -156,97 +156,42 @@ func (e *Executor) DoDeliveryTrx(ctx context.Context, wId int, oCarrierId int, o
 // also the dId passed from the worker is probably utterly wrong
 func (e *Executor) DoDelivery(ctx context.Context, wId int, oCarrierId int, olDeliveryD time.Time, dId int) (context.Context, error) {
 
-	// save new order for Rollback
-	co, _ID, err := e.db.CheckNewOrder(ctx, wId, dId)
-	// not exist only elasticsearch
+	no, err := e.db.GetNewOrder(ctx, wId, dId)
 	if err != nil {
-		return nil, err
-	}
-	var ctrx context.Context
-	//exist
-	if co != nil {
-		ctrx := context.WithValue(ctx, "co", co)
-
-		if err != nil {
-			return ctrx, err
-		}
-		ctrx2 := context.WithValue(ctx, "ID", *_ID)
-
-		// find by logical id (delete)
-		no, err := e.db.GetNewOrder(ctrx2, wId, dId)
-		if err != nil {
-			return ctrx, err
-		}
-
-		cid, err := e.db.GetCustomerIdOrder(ctx, no.NO_O_ID, wId, dId)
-		if err != nil {
-			return ctrx, err
-		}
-
-		olAmount, err := e.db.SumOLAmount(ctx, no.NO_O_ID, wId, dId)
-		if err != nil {
-			return ctrx, err
-		}
-
-		err = e.db.DeleteNewOrder(ctx, no.NO_O_ID, wId, dId)
-		if err != nil {
-			return ctrx, err
-		}
-
-		_, err = e.db.GetCustomerIdOrder(ctx, no.NO_O_ID, wId, dId)
-		if err != nil {
-			return ctrx, err
-		}
-
-		err = e.db.UpdateOrders(ctx, no.NO_O_ID, wId, dId, oCarrierId, olDeliveryD)
-		if err != nil {
-			return ctrx, err
-		}
-
-		err = e.db.UpdateCustomer(ctx, cid, wId, dId, olAmount)
-		if err != nil {
-			return ctrx, err
-		}
-
-	} else {
-		no, err := e.db.GetNewOrder(ctx, wId, dId)
-		if err != nil {
-			return ctrx, err
-		}
-
-		cid, err := e.db.GetCustomerIdOrder(ctx, no.NO_O_ID, wId, dId)
-		if err != nil {
-			return ctrx, err
-		}
-
-		olAmount, err := e.db.SumOLAmount(ctx, no.NO_O_ID, wId, dId)
-		if err != nil {
-			return ctrx, err
-		}
-
-		err = e.db.DeleteNewOrder(ctx, no.NO_O_ID, wId, dId)
-		if err != nil {
-			return ctrx, err
-		}
-
-		_, err = e.db.GetCustomerIdOrder(ctx, no.NO_O_ID, wId, dId)
-		if err != nil {
-			return ctrx, err
-		}
-
-		err = e.db.UpdateOrders(ctx, no.NO_O_ID, wId, dId, oCarrierId, olDeliveryD)
-		if err != nil {
-			return ctrx, err
-		}
-
-		err = e.db.UpdateCustomer(ctx, cid, wId, dId, olAmount)
-		if err != nil {
-			return ctrx, err
-		}
-
+		return ctx, err
 	}
 
-	return ctrx, nil
+	cid, err := e.db.GetCustomerIdOrder(ctx, no.NO_O_ID, wId, dId)
+	if err != nil {
+		return ctx, err
+	}
+
+	olAmount, err := e.db.SumOLAmount(ctx, no.NO_O_ID, wId, dId)
+	if err != nil {
+		return ctx, err
+	}
+
+	err = e.db.DeleteNewOrder(ctx, no.NO_O_ID, wId, dId)
+	if err != nil {
+		return ctx, err
+	}
+
+	_, err = e.db.GetCustomerIdOrder(ctx, no.NO_O_ID, wId, dId)
+	if err != nil {
+		return ctx, err
+	}
+
+	err = e.db.UpdateOrders(ctx, no.NO_O_ID, wId, dId, oCarrierId, olDeliveryD)
+	if err != nil {
+		return ctx, err
+	}
+
+	err = e.db.UpdateCustomer(ctx, cid, wId, dId, olAmount)
+	if err != nil {
+		return ctx, err
+	}
+
+	return ctx, nil
 }
 
 func (e *Executor) DoOrderStatusTrx(ctx context.Context, warehouseId, districtId, cId int, cLast string) error {

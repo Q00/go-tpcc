@@ -1,0 +1,26 @@
+Creating schema
+... done
+Loading items
+Loading warehouse 1
+Loading warehouse 2
+Loading warehouse 3
+Loading warehouse 4
+Loading warehouse 5
+Loading warehouse 6
+Loading warehouse 7
+Loading warehouse 8
+Loading warehouse 9
+Loading warehouse 10
+Loading warehouse 11
+Loading warehouse 12
+Loading warehouse 13
+Loading warehouse 14
+Loading warehouse 15
+Loading warehouse 16
+Loading warehouse 17
+Loading warehouse 18
+Loading warehouse 19
+Loading warehouse 20
+Creating indexes
+... done
+Execution time: 18m52.390613772s

@@ -1,0 +1,82 @@
+version: "2.2"
+services:
+  # master-node의 Docker 서비스입니다.
+  # Kibana에서 기본적으로 호출하는 ES host주소가 'http://elsaticsearch:9200'이기 때문에 서비스명은 elasticsearch로 쓰시는게 편합니다.
+  # 다른 서비스명을 사용시 Kibana ES host 설정도 같이 추가해주어야 정상 동작합니다.
+  elasticsearch:
+    container_name: elasticsearch
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.15.0
+    environment:
+      # ES Cluster명입니다. ES 서비스마다 동일한 명칭을 사용해야합니다.
+      - cluster.name=docker-cluster
+      # ES Node명을 설정합니다.
+      - node.name=master-node1
+      # ES운영중 메모리 스왑을 막기 위한 설정을 추가합니다.
+      # 자세한 설명은 페이지 하단의 [Disable swapping]을 참고하세요.
+      - bootstrap.memory_lock=true
+      - cluster.initial_master_nodes=master-node1
+      # JVM Heap메모리 설정입니다. Xms/Xmx 옵션은 항상 같게 설정합니다.
+      # 자세한 설명은 페이지 하단의 [Setting the heap size]을 참고하세요.
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - discovery.seed_hosts=elasticsearch2
+    # 리눅스 시스템 자원제한 관련 옵션입니다.
+    # ES는 많은 파일디스크립터와 핸들러를 사용하기 때문에 제한 해제가 필요합니다.
+    # 자세한 설명은 페이지 하단의 [File Descriptors]을 참고하세요.
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - es1:/usr/share/elasticsearch/data
+    # Kibana에서 본 노드를 호출하기 때문에 외부 9200포트는 master-node에 연결해줍니다.
+    ports:
+      - 9200:9200
+      - 9300:9300
+    networks:
+      - esnet
+    # 컨테이너에 bash로 붙고 싶을경우 아래 두 옵션을 추가해주면 됩니다.
+    stdin_open: true
+    tty: true
+  # data-node의 Docker 서비스입니다.
+  # 대부분의 내용이 master-node와 동일하나 몇가지 차이점이 있습니다.
+  elasticsearch2:
+    container_name: elasticsearch2
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.15.0
+    environment:
+      - cluster.name=docker-cluster
+      - node.name=data-node1
+      - cluster.initial_master_nodes=master-node1
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      # 다른 Cluster내 노드를 발견하기 위한 설정입니다.
+      - discovery.zen.ping.unicast.hosts=elasticsearch:9200
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - es2:/usr/share/elasticsearch/data
+    # 외부 연결포트가 master-node와 겹치기 때문에 다르게 설정했습니다.
+    ports:
+      - 9301:9300
+    networks:
+      - esnet
+    stdin_open: true
+    tty: true
+    # 각 서비스를 순차적으로 실행하기 위해 설정해주었습니다. (필수아님)
+    depends_on:
+      - elasticsearch
+
+volumes:
+  es1:
+    driver: local
+  es2:
+    driver: local
+networks:
+  esnet:

@@ -6,12 +6,10 @@
 ./go-tpcc prepare  --threads 10 --warehouses 20 --uri mongodb://localhost:27017 --db DatabaseName
 ```
 
-
 ## Running test
 
-
 ```
-./go-tpcc run  --threads 1 --warehouses 2 --uri mongodb://localhost:27017 --db DatabaseName --time 200 --trx --report-format json --percentile 95 --report-interval 1 --percent-fail 0
+./go-tpcc run  --threads 1 --warehouses 2 --uri http://localhost:9200 --dbdriver elasticSearch --time 200 --trx --report-format json --percentile 95 --report-interval 1 --percent-fail 0
 
  ./go-tpcc help run
 Run

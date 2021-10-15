@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"reflect"
 	"strings"
 	"time"
 
@@ -352,78 +351,71 @@ func (db *ElasticSearch) CheckNewOrder(ctx context.Context, warehouseId int, dis
 }
 
 // It also deletes new order, as ElasticSearch can do that lock is set to 0
-func (db *ElasticSearch) GetNewOrder(ctx context.Context, _ int, _ int) (*models.NewOrder, error) {
+func (db *ElasticSearch) GetNewOrder(ctx context.Context, wID int, dID int) (*models.NewOrder, error) {
 
-	if db.lock {
-		// check new order exist. if not exist, still locked
-		var NewOrder models.NewOrder
-		var NOID string
-
-		ID := ctx.Value("ID")
-		for {
-			var buf bytes.Buffer
-			query := map[string]interface{}{
-				"query": map[string]interface{}{
-					"ids": map[string]interface{}{
-						"values": [1]string{ID.(string)},
+	var NewOrder models.NewOrder
+	query := map[string]interface{}{
+		"query": map[string]interface{}{
+			"bool": map[string]interface{}{
+				"filter": []map[string]interface{}{
+					0: {
+						"match": map[string]interface{}{
+							"NO_D_ID": dID,
+						},
+					},
+					1: {
+						"match": map[string]interface{}{
+							"NO_W_ID": wID,
+						},
 					},
 				},
-			}
-			if err := json.NewEncoder(&buf).Encode(query); err != nil {
-				log.Fatalf("Error encoding query: %s", err)
-			}
-			indexes := [1]string{"new_order"}
-
-			req := esapi.SearchRequest{
-				Index: indexes[:],
-				Body:  &buf,
-			}
-
-			res, err := req.Do(ctx, db.Client)
-
-			if err != nil {
-				log.Fatalf("Error getting response: %s", err)
-			}
-			defer res.Body.Close()
-
-			if res.IsError() {
-				continue
-			}
-
-			var r types.SearchResponseESNOrder
-			if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
-				log.Fatalf("Error parsing the response body: %s", err)
-				continue
-			}
-
-			for _, hit := range r.Hits.Hits {
-				// log.Printf(" * ID=%s", hit.ID)
-				NewOrder = hit.Source
-				NOID = hit.ID
-				break
-			}
-
-			v := reflect.ValueOf(NewOrder)
-			// check get new_order
-			if !v.IsZero() {
-				break
-			}
-		}
-
-		// new order lock
-		req := esapi.DeleteRequest{
-			Index:      "new_order",
-			DocumentID: string(NOID),
-		}
-
-		// delete
-		_, err := req.Do(ctx, db.Client)
-		if err != nil {
-			return nil, err
-		}
-
-		return &NewOrder, nil
+			},
+		},
 	}
+
+	// var q types.BoolMustQuery
+
+	// q.Query.Bool.Must = m
+
+	//!TODO: check version
+
+	indexes := [1]string{"new_order"}
+
+	refresh := new(bool)
+	*refresh = true
+	qString, err := json.Marshal(query)
+	if err != nil {
+		return nil, err
+	}
+
+	req := esapi.SearchRequest{
+		Index: indexes[:],
+		Query: helpers.ReplaceSp(string(qString)),
+	}
+
+	res, err := req.Do(ctx, db.Client)
+
+	if err != nil {
+		log.Fatalf("Error getting response: %s", err)
+	}
+	defer res.Body.Close()
+
+	if res.IsError() {
+		return nil, err
+	}
+
+	var r types.SearchResponseESNOrder
+	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
+		log.Fatalf("Error parsing the response body: %s", err)
+		return nil, err
+	}
+
+	for _, hit := range r.Hits.Hits {
+		// log.Printf(" * ID=%s", hit.ID)
+		NewOrder = hit.Source
+		break
+	}
+	return &NewOrder, nil
 
 	return nil, nil
 }

@@ -1,0 +1,1 @@
+./go-tpcc prepare  --threads 2 --warehouses 10 --uri 'http://127.0.0.1:9200' --db logs_db --dbdriver elasticsearch
