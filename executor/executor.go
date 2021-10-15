@@ -403,25 +403,26 @@ func (e *Executor) DoNewOrder(ctx context.Context, wId, dId, cId int, oEntryD ti
 		} else {
 			sQuantity += 91 - iQtys[0]
 		}
+		
+		S_REMOTE_CNT := (*stocks)[i].S_REMOTE_CNT
 
 		S_REMOTE_CNT := (*stocks)[i].S_REMOTE_CNT
 
 		if iWids[i] != wId {
 			S_REMOTE_CNT += 1
 		}
-
+		
 		err = e.db.UpdateStock(
-			ctx,
-			(*stocks)[i].S_I_ID,
-			iWids[1],
-			sQuantity,
-			(*stocks)[i].S_YTD+iQtys[i],
-			(*stocks)[i].S_ORDER_CNT+1,
-			S_REMOTE_CNT,
-		)
+				(*stocks)[i].S_I_ID,
+				iWids[1],
+				sQuantity,
+				(*stocks)[i].S_YTD + iQtys[i],
+				(*stocks)[i].S_ORDER_CNT + 1,
+				S_REMOTE_CNT,
+			)
 
 		if err != nil {
-			return ctx, err
+			return err
 		}
 
 		orderLines = append(orderLines, models.OrderLine{
